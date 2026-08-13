@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Medicine & Vaccine Issue DC</title>
+    <style>
+        body { font-family: 'Arial', sans-serif; padding: 20px; font-size: 14px; }
+        .header { text-align: center; margin-bottom: 20px; }
+        .info-table { width: 100%; margin-bottom: 20px; border-collapse: collapse; }
+        .data-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .data-table th, .data-table td { border: 1px solid black; padding: 8px; text-align: left; }
+        .footer { width: 100%; margin-top: 50px; }
+        .text-right { text-align: right; }
+        .center { text-align: center; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <strong>KRISHI NUTRITION COMPANY PRIVATE LIMITED</strong><br />
+        <u><strong>MEDICINE &amp; VACCINE ISSUE DC</strong></u>
+    </div>
+
+    <table class="info-table">
+        <tr>
+            <td>Branch : <%= branch %> - <%= branch_name %></td>
+            <td class="text-right">S.No : <strong><%= doc_no %></strong></td>
+        </tr>
+        <tr>
+            <td colspan="2">Farm Name : <%= farmer_name %></td>
+        </tr>
+        <tr>
+            <td>No. of Chicks : <%= no_of_chicks %></td>
+            <td class="text-right">Date : <%= date %></td>
+        </tr>
+        <tr>
+            <td colspan="2">Age : <%= age %> Days</td>
+        </tr>
+    </table>
+
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th width="40">S.No</th>
+                <th>PARTICULARS</th>
+                <th width="100">QTY.</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% medicines.forEach((med, index) => { %>
+                <tr>
+                    <td class="center"><%= index + 1 %></td>
+                    <td><%= med.material_name || med.material_name %></td>
+                    <td class="center"><%= med.issue_quantity %></td>
+                </tr>
+            <% }); %>
+            
+            <% for(let i = medicines.length; i < 10; i++) { %>
+                <tr>
+                    <td>&nbsp;</td>
+                    <td>&nbsp;</td>
+                    <td>&nbsp;</td>
+                </tr>
+            <% } %>
+        </tbody>
+    </table>
+
+    <table class="footer">
+        <tr>
+            <td width="50%">
+                ___________________________<br />
+                Farmer Sign.
+            </td>
+            <td width="50%" class="text-right">
+                ___________________________<br />
+                For Krishi N.C (P) Ltd.,
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bill of Supply DC</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 10px; color: #333; margin: 0; padding: 20px; }
+        .challan-container { border: 2px solid #000; width: 800px; margin: 0 auto; padding: 10px; }
+        .header { text-align: center; font-weight: bold; font-size: 1.1em; line-height: 1.4; }
+        .header p { margin: 0; }
+        .company-logo { width: 168px; height: auto; object-fit: contain; }
+        .company-details { display: flex; justify-content: space-between; margin-bottom: 20px; }
+        .company-info { text-align: left; }
+        .delivery-title { background-color: #ffff00; text-align: center; font-weight: bold; margin: 10px 0; padding: 5px 0; border: 1px solid #000; font-size: 1.1em; }
+        .shipper-info { display: flex; border: 1px solid #000; border-bottom: none; }
+        .shipper-info > div { width: 50%; padding: 5px; box-sizing: border-box; }
+        .shipper-info div strong { display: block; margin-bottom: 3px; }
+        .bill-info { display: flex; border: 1px solid #000; }
+        .bill-info > div { width: 50%; padding: 5px; box-sizing: border-box; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; border: 1px solid #000; }
+        table th, table td { border: 1px solid #000; padding: 3px; text-align: center; font-size: 0.9em; }
+        table th { background-color: #f2f2f2; }
+        table tr:last-child td { font-weight: bold; }
+        .summary-table { border: 1px solid #000; border-collapse: collapse; margin-top: 10px; }
+        .summary-table td, .summary-table th { border: 1px solid #000; padding: 5px; text-align: center; }
+        .summary-table .label { text-align: center; font-weight: bold; }
+        .approx-value-table { border: 1px solid #000; border-collapse: collapse; margin-top: 10px; }
+        .approx-value-table td { border: none; padding: 2px 5px; text-align: left;}
+        .approx-value-table .value-row td { border: 1px solid #000; }
+        .approx-value-table td strong { font-weight: bold; }
+        .approx-value-table td span { font-weight: bold; }
+        .provisionally { font-size: 1.1em; color: #555; }
+        .footer-info { display: flex; justify-content: space-between; margin-top: 10px; border-top: 1px solid #000; padding-top: 10px; }
+        .footer-left { width: 60%; }
+        .footer-right { width: 35%; text-align: right; }
+        .footer-left strong { min-width: 120px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="challan-container">
+        <div class="company-details">
+            <img class="company-logo" src="https://i.postimg.cc/L5VKhNt5/Logo-2.png" alt="Krishi Logo" />
+            <div class="company-info">
+            <!-- <div><b>KRISHI NUTRITION COMPANY PRIVATE LIMITED</b></div>
+            <div>Regd. Office : Plot No. KK8, KK9, 3rd Cross Street Road,</div>
+            <div>Sipcot Industrial Growth Center</div>
+            <div>PERUNDURAI - 638052, Erode, Tamil Nadu</div>
+            <div>CIN : U15200TZ2013PTC019958</div>
+            <div>GSTIN : 33AAFCK3415K1ZO</div> -->
+            <p>KRISHI NUTRITION COMPANY PRIVATE LIMITED</p>
+            <p><u>Bill & Despatch From :</u> D.NO.4/119A, MUTHU ACHARI STREET, NEAR</p>
+            <p>GEETHANJALI PRIMARY SCHOOL,KAVERIPATTINAM, KRISHNAGIRI (DT),</p>
+            <p>TAMIL NADU - 635112</p>
+            <p>GSTIN No. : 33AAFCK3415K1ZO</p>
+            <p>DOC. No. : <%= doc_no %> </p>
+            </div>
+        </div>
+
+        <div class="delivery-title">
+            Delivery Challan (only for stock movement within the state)
+        </div>
+
+        <div class="shipper-info">
+            <div>
+                <strong>Shipped From :</strong>
+                THANGAVEL - THANGAMEDU<br>
+                KANJIKOVIL, PERUNDURAI - 638052,<br>
+                ERODE-DISTRICE, TAMILNADU
+            </div>
+            <div>
+                <strong>Bill / Delivery To :</strong>
+                VIYAAN ENTERPRISE - (D000XX)<br>
+                PATTAKARANPALAYAM,PERUNDURAI<br>
+                ERODE-638052, TAMILNADU
+            </div>
+        </div>
+
+        <div class="bill-info">
+            <div><strong>DC No.</strong> <%= dc_no %></div>
+            <div><strong>Date:</strong> <%= date %> </div>
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>S.No</th>
+                    <th>CAGE(Nos)</th>
+                    <th>EMPTY WT(Kgs)</th>
+                    <th>LOAD WT(Kgs)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% 
+                   var totalCage = 0;
+                   var totalEmpty = 0;
+                   var totalLoad = 0;
+                   for(var i=0; i<load_details.length; i++){
+                       totalCage += load_details[i].cage;
+                       totalEmpty += parseFloat(load_details[i].emptyWeight);
+                       totalLoad += parseFloat(load_details[i].loadWeight);
+                %>
+                <tr>
+                    <td><%= i+1 %></td>
+                    <td><%= load_details[i].cage %></td>
+                    <td><%= load_details[i].emptyWeight %></td>
+                    <td><%= load_details[i].loadWeight %></td>
+                </tr>
+                <% } %>
+                <tr>
+                    <td colspan="1">Total</td>
+                    <td><%= totalCage %></td>
+                    <td><%= totalEmpty.toFixed(2) %></td>
+                    <td><%= totalLoad.toFixed(2) %></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table style="margin-top: 10px;">
+            <thead>
+                <tr>
+                    <th>S.No</th>
+                    <th>CAGES (Nos)</th>
+                    <th>BIRDS per cage</th>
+                    <th>TOTAL Birds</th>
+                </tr>
+            </thead>
+            <tbody>
+                 <% 
+                   var totalBirdCages = 0;
+                   var totalBirds = 0;
+                   for(var i=0; i<birds_details.length; i++){
+                       totalBirdCages += birds_details[i].cage;
+                       totalBirds += ( birds_details[i].cage * birds_details[i].birds );
+                %>
+                <tr>
+                    <td><%= i+1 %></td>
+                    <td><%= birds_details[i].cage %></td>
+                    <td><%= birds_details[i].birds %></td>
+                    <td><%= ( birds_details[i].cage * birds_details[i].birds) %></td>
+                </tr>
+                <% } %>
+                <tr>
+                    <td colspan="1">Total</td>
+                    <td><%= totalBirdCages %></td>
+                    <td></td>
+                    <td><%= totalBirds %></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td class="label">Total Birds</td>
+                <td class="label">Total Cages</td>
+                <td class="label">Total Wt.( KGS)</td>
+                <td class="label">Avg Wt.per bird</td>
+            </tr>
+            <tr>
+                <td><%= totalBirds %></td>
+                <td><%= totalCage %></td>
+                <td><%= totalLoad.toFixed(3) %></td>
+                <td><%= average_weight.toFixed(2) %></td>
+            </tr>
+        </table>
+
+        <table class="approx-value-table">
+            <tr class="value-row">
+                <td class="label" colspan="2">Approx. Rate (Per Kg in Rs.)</td>
+                <td style="text-align: right;" colspan="2"><%= rate.toFixed(2) %></td>
+            </tr>
+            <tr class="value-row">
+                <td class="label" colspan="2">Approx. Value</td>
+                <td style="text-align: right;" colspan="2"><%= gross_value.toFixed(2) %></td>
+            </tr>
+            <tr>
+                <td colspan="4">(Amount in Rs.xxxx)</td>
+            </tr>
+            <tr class="provisionally">
+                <td colspan="4">The approximate value is declared only provisionally and not final value</td>
+            </tr>
+        </table>
+
+        <div class="footer-info">
+            <div class="footer-left">
+                <strong>Vehicle No.</strong> <%= vehicle_no %> <br>
+                <strong>Driver Name</strong> <%= driver_name %> <br>
+                <strong>Supervisor</strong> <%= supervisor_name %> <br>
+                <strong>Weighing Scale No.</strong> <%= weight_scale_no %>
+            </div>
+            <div class="footer-right">
+                <strong>Mobile No.</strong> <%= driver_mobile %> <br>
+                <div style="display: inline-block; margin-top: 15px;">
+                    <strong>Start Time</strong> <%= start_time %>
+                </div>
+                <div style="display: inline-block; margin-top: 15px; margin-left: 20px;">
+                    <strong>End Time</strong> <%= end_time %>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

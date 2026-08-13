@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Feed Order Request</title>
+    <style>
+        body { font-family: 'Helvetica', 'Arial', sans-serif; font-size: 11px; color: #333; line-height: 1.4; padding: 10px; }
+        .header-section { margin-bottom: 15px; border-bottom: 2px solid #444; padding-bottom: 10px; }
+        .company-name { font-size: 18px; font-weight: bold; text-align: center; display: block; letter-spacing: 0.5px; }
+        
+        .header-grid { display: table; width: 100%; margin-top: 12px; }
+        .header-row { display: table-row; }
+        .header-cell { display: table-cell; padding: 4px 0; }
+        .label { font-weight: bold; color: #555; }
+
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; border: 1px solid #93c5fd; }
+        th { background-color: #dbeafe; color: #1e3a8a; font-weight: bold; border: 1px solid #93c5fd; padding: 8px 6px; text-align: center; font-size: 11px; }
+        td { border: 1px solid #93c5fd; padding: 8px 6px; vertical-align: middle; text-align: center; font-size: 11px; }
+        
+        .text-left { text-align: left; }
+        .text-right { text-align: right; }
+        .text-center { text-align: center; }
+        .farm-title { font-weight: bold; color: #1e3a8a; }
+        .batch-badge { font-weight: normal; color: #333; }
+
+        .footer-row { background-color: #f1f5f9; font-weight: bold; }
+        .footer-row td { font-size: 12px; color: #000; }
+    </style>
+</head>
+<body>
+
+    <div class="header-section">
+        <span class="company-name">FEED ORDER REQUEST</span>
+        
+        <div class="header-grid">
+            <div class="header-row">
+                <div class="header-cell">
+                    <span class="label">Doc No:</span> <%= doc_no %>
+                </div>
+                <div class="header-cell text-right">
+                    <span class="label">Date:</span> <%= delivery_date || new Date().toLocaleDateString('en-IN') %>
+                </div>
+            </div>
+            <div class="header-row">
+                <div class="header-cell">
+                    <span class="label">Vehicle No:</span> <%= vehicle_no %>
+                </div>
+                <div class="header-cell text-right">
+                    <span class="label">Mobile:</span> <%= mobile %>
+                </div>
+            </div>
+            <div class="header-row">
+                <div class="header-cell">
+                    <span class="label">Freight:</span> <%= freight %>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <p class="label" style="font-size: 13px; margin-top: 15px;">Feed Order Request Items:</p>
+
+    <%
+        // Helper to format date as DD/MM/YYYY
+        const fmtDate = (d) => {
+            if (!d || d === '-') return '-';
+            const isoMatch = String(d).match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (isoMatch) return `${isoMatch[3]}/${isoMatch[2]}/${isoMatch[1]}`;
+            return d;
+        };
+
+        const grouped = {};
+        if (requests && requests.length > 0) {
+            requests.forEach(item => {
+                const key = item.farmer || item.farmerName || 'default';
+                if (!grouped[key]) {
+                    // Fallback: if chicks_placed_dt missing, use today - 12 days
+                    let chicksDt = item.chicks_placed_dt || '';
+                    if (!chicksDt) {
+                        const fallback = new Date();
+                        fallback.setDate(fallback.getDate() - 12);
+                        chicksDt = fallback.toISOString().split('T')[0];
+                    }
+                    grouped[key] = {
+                        farmer: item.farmer,
+                        farmerName: item.farmerName || '',
+                        batch: item.batch || '',
+                        chicks_placed_dt: chicksDt,
+                        chicks_placed: item.chicks_placed || '',
+                        bps: 0,
+                        bsc: 0,
+                        bfp: 0,
+                        total: 0
+                    };
+                }
+                const qty = Number(item.quantity || 0);
+                const mat = ((item.material || '') + ' ' + (item.materialLabel || '')).toLowerCase();
+                
+                if (mat.includes('71') || mat.includes('pre starter') || mat.includes('bps')) {
+                    grouped[key].bps += qty;
+                } else if (mat.includes('72') || mat.includes('starter') || mat.includes('bsc')) {
+                    grouped[key].bsc += qty;
+                } else if (mat.includes('73') || mat.includes('finisher') || mat.includes('bfp')) {
+                    grouped[key].bfp += qty;
+                } else {
+                    grouped[key].bps += qty;
+                }
+                grouped[key].total = grouped[key].bps + grouped[key].bsc + grouped[key].bfp;
+            });
+        }
+        const farmRows = Object.values(grouped);
+        const reqDate = delivery_date || new Date().toLocaleDateString('en-IN');
+    %>
+
+    <table>
+        <thead>
+            <tr>
+                <th style="width: 5%;">SL No</th>
+                <th style="width: 12%;">Delivery Date</th>
+                <th style="width: 33%;">Farm Name</th>
+                <th style="width: 13%;">Chicks Placed DT</th>
+                <th style="width: 7%;">Batch</th>
+                <th style="width: 10%;">Chicks Placed</th>
+                <th style="width: 5%;">BPS</th>
+                <th style="width: 5%;">BSC</th>
+                <th style="width: 5%;">BFP</th>
+                <th style="width: 5%;">Total Qty</th>
+            </tr>
+        </thead>
+        <tbody>
+            <% if (farmRows && farmRows.length > 0) { %>
+                <% farmRows.forEach((row, index) => { %>
+                    <tr>
+                        <td class="text-center"><%= index + 1 %></td>
+                        <td class="text-center"><%= reqDate %></td>
+                        <td class="text-left">
+                            <span class="farm-title"><%= row.farmer %></span>
+                            <% if (row.farmerName) { %> - <%= row.farmerName %><% } %>
+                            <% if (row.batch) { %> [ BATCH - <%= row.batch %> ]<% } %>
+                        </td>
+                        <td class="text-center"><%= fmtDate(row.chicks_placed_dt) %></td>
+                        <td class="text-center"><strong><%= row.batch || '-' %></strong></td>
+                        <td class="text-center"><%= row.chicks_placed ? Number(row.chicks_placed).toLocaleString() : '-' %></td>
+                        <td class="text-center"><%= row.bps || '-' %></td>
+                        <td class="text-center"><%= row.bsc || '-' %></td>
+                        <td class="text-center"><%= row.bfp || '-' %></td>
+                        <td class="text-center"><strong><%= row.total %></strong></td>
+                    </tr>
+                <% }) %>
+            <% } else { %>
+                <tr>
+                    <td colspan="10" class="text-center">No items found</td>
+                </tr>
+            <% } %>
+        </tbody>
+        <% if (farmRows && farmRows.length > 0) { %>
+        <tfoot>
+            <tr class="footer-row">
+                <td colspan="6" style="text-align: right; padding-right: 15px;">Total :</td>
+                <td class="text-center"><%= farmRows.reduce((sum, r) => sum + r.bps, 0) || '-' %></td>
+                <td class="text-center"><%= farmRows.reduce((sum, r) => sum + r.bsc, 0) || '-' %></td>
+                <td class="text-center"><%= farmRows.reduce((sum, r) => sum + r.bfp, 0) || '-' %></td>
+                <td class="text-center"><%= farmRows.reduce((sum, r) => sum + r.total, 0) %></td>
+            </tr>
+        </tfoot>
+        <% } %>
+    </table>
+
+</body>
+</html>

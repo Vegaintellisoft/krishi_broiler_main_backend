@@ -1,0 +1,291 @@
+{
+    "stock_location": {
+        "sapEndpoint": "ZBRO_LOC",
+        "pgTable": "stock_location",
+        "primaryKey": ["client","plant","supplier_account_number"],
+        "sapPrimaryKey": "LIFNR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "LIFNR", "db": "supplier_account_number"},
+            {"sap": "W_NAME1", "db": "plant_name"},
+            {"sap": "L_NAME1", "db": "farmer_name"}
+        ]
+    },
+    "hatchery_machine": {
+        "sapEndpoint": "BRO_HAT_MAC",
+        "pgTable": "hatchery_machine",
+        "primaryKey": ["client","machine_code"],
+        "sapPrimaryKey": "ZZBRO_MAC",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZZBRO_MAC", "db": "machine_code"},
+            {"sap": "ZZBRO_MAC_N", "db": "machine_name"},
+            {"sap": "ZZCAPACITY", "db": "capacity"},
+            {"sap": "ZSET_QTY", "db": "available_capacity"}
+        ]
+    },
+    "line_master": {
+        "sapEndpoint": "BRO_LINE",
+        "pgTable": "line_master",
+        "primaryKey":  ["client","plant","line_no"],
+        "sapPrimaryKey": "ZZLINE",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZZLINE", "db": "line_no"},
+            {"sap": "ZZLINE_N", "db": "line_name"}
+        ]
+    },
+    "rejection_reason": {
+        "sapEndpoint": "MM_H_REASONS",
+        "pgTable": "rejection_reason",
+        "primaryKey":  ["client","reason_type","reason_code"],
+        "sapPrimaryKey": "RS_CODE",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "RS_TYPE", "db": "reason_type"},
+            {"sap": "RS_CODE", "db": "reason_code"},
+            {"sap": "RS_TXT", "db": "reason_description"}
+        ]
+    },
+    "shed_capacity": {
+        "sapEndpoint": "SHED_CAP",
+        "pgTable": "shed_capacity",
+        "primaryKey": ["client","shed_type"],
+        "sapPrimaryKey": "ZZFARM_ST",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZZFARM_ST", "db": "shed_type"},
+            {"sap": "ZPER_SHED", "db": "capacity"}
+        ]
+    },
+    "mortality_reasons": {
+        "sapEndpoint": "MM_B_REASON",
+        "pgTable": "mortality_reasons",
+        "primaryKey":["client","reason_code"],
+        "sapPrimaryKey": "RS_CODE",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "RS_CODE", "db": "reason_code"},
+            {"sap": "RS_TXT", "db": "reason_description"}
+        ]
+    },
+    "age_wise_standard_body_weight": {
+        "sapEndpoint": "BRO_SBW",
+        "pgTable": "age_wise_standard_body_weight",
+        "primaryKey": ["client", "age"],
+        "sapPrimaryKey": "ZZ_AGE",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZZ_AGE", "db": "age"},
+            {"sap": "ZSTD_BW", "db": "bw_quantity"},
+            {"sap": "ZSFI_KG", "db": "kg_quantity"}
+        ]
+    },
+    "mortality_incentive": {
+        "sapEndpoint": "BRO_MOR_INC",
+        "pgTable": "mortality_incentive",
+        "primaryKey": ["client", "from_amount","to_amount"],
+        "sapPrimaryKey": "ZZFRMO_FCR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZZFRMO_FCR", "db": "from_amount"},
+            {"sap": "ZZTO_FCR", "db": "to_amount"},
+            {"sap": "AMOUNT", "db": "amount"}
+        ]
+    },
+    "mortality_deduction": {
+        "sapEndpoint": "BRO_MOR_DED",
+        "pgTable": "mortality_deduction",
+        "primaryKey":  ["client", "from_amount","to_amount"],
+        "sapPrimaryKey": "ZZFRMO_FCR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZZFRMO_FCR", "db": "from_amount"},
+            {"sap": "ZZTO_FCR", "db": "to_amount"},
+            {"sap": "AMOUNT", "db": "amount"}
+        ]
+    },
+    "medicine_deduction_maintain": {
+        "sapEndpoint": "BRO_MED_FCR",
+        "pgTable": "medicine_deduction_maintain",
+        "primaryKey": ["client", "wrbtr_amount","wrbtr_p_amount"],
+        "sapPrimaryKey": "WRBTR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WRBTR", "db": "wrbtr_amount"},
+            {"sap": "WRBTR_p", "db": "wrbtr_p_amount"}
+        ]
+    },
+    "earned_rc_eer": {
+        "sapEndpoint": "BRO_EER",
+        "pgTable": "earned_rc_eer",
+        "primaryKey": ["client", "db_field_name", "erc_amount"],
+        "sapPrimaryKey": "ZSEL",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZSEL", "db": "db_field_name"},
+            {"sap": "ZERC", "db": "erc_amount"},
+            {"sap": "ZNEW_GC", "db": "new_gc_amount"}
+        ]
+    },
+    "earned_rc_cfcr": {
+        "sapEndpoint": "ZBRO_CFCR",
+        "pgTable": "earned_rc_cfcr",
+        "primaryKey":  ["client", "db_field_name", "erc_amount"],
+        "sapPrimaryKey": "ZSEL",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZSEL", "db": "db_field_name"},
+            {"sap": "ZERC", "db": "erc_amount"},
+            {"sap": "ZNEW_GC", "db": "new_gc_amount"}
+        ]
+    },
+    "vehicle_type_cost": {
+        "sapEndpoint": "HAT_VEH_COST",
+        "pgTable": "vehicle_type_cost",
+        "primaryKey":  ["client",  "vehicle_sub_type","amount"],
+        "sapPrimaryKey": "ZVEH_STYP",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZVEH_STYP", "db": "vehicle_sub_type"},
+            {"sap": "TRA_COST", "db": "amount"}
+        ]
+    },
+    "fcr_grade": {
+        "sapEndpoint": "FCR_GRADE",
+        "pgTable": "fcr_grade",
+        "primaryKey": ["client", "db_field_name","erc_amount","erc1_amount"],
+        "sapPrimaryKey": "ZSEL",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZSEL", "db": "db_field_name"},
+            {"sap": "ZERC", "db": "erc_amount"},
+            {"sap": "ZERC1", "db": "erc1_amount"},
+            {"sap": "ZGRADE", "db": "grade"}
+        ]
+    },
+    "sales_emp_default": {
+        "sapEndpoint": "ZZBS_EMP_DET",
+        "pgTable": "sales_emp_default",
+        "primaryKey":["client", "plant"],
+        "sapPrimaryKey": "WERKS",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZZORDER_BY", "db": "ordered_by"},
+            {"sap": "ZZDISP_BY", "db": "dispatched_by"}
+        ]
+    },
+    "sales_rate": {
+        "sapEndpoint": "ZBRO_SAL_RATE",
+        "pgTable": "sales_rate",
+        "primaryKey": ["client", "plant"],
+        "sapPrimaryKey": "WERKS",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "RATE", "db": "rate_amount"},
+            {"sap": "ALL_PER", "db": "all_per_amount"}
+        ]
+    },
+    "egg_code_list": {
+        "sapEndpoint": "ZBRE_EGG_CODE",
+        "pgTable": "egg_code_list",
+        "primaryKey": ["client", "material_number"],
+        "sapPrimaryKey": "MATNR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "MATNR", "db": "material_number"},
+            {"sap": "MAKTX", "db": "material_description"}
+        ]
+    },
+    "fcr_grade_block": {
+        "sapEndpoint": "ZFCR_GRADE_BLK",
+        "pgTable": "fcr_grade_block",
+        "primaryKey":  ["client", "amount"],
+        "sapPrimaryKey": "ZERC",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "ZERC", "db": "amount"}
+        ]
+    },
+    "shed_incentive_details": {
+        "sapEndpoint": "ZMM_BROIL_SHED",
+        "pgTable": "shed_incentive_details",
+        "primaryKey":  ["client", "plant", "start_date"],
+        "sapPrimaryKey": "BEGDA",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "BEGDA", "db": "start_date"},
+            {"sap": "ENDDA", "db": "end_date"},
+            {"sap": "SHED_INC", "db": "shed_incentive"}
+        ]
+    },
+    "mortality_incentive_plant": {
+        "sapEndpoint": "ZBRO_MOR_INC_P",
+        "pgTable": "mortality_incentive_plant",
+        "primaryKey": ["client", "plant", "from_amount","to_amount"],
+        "sapPrimaryKey": "ZZFRMO_FCR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZZFRMO_FCR", "db": "from_amount"},
+            {"sap": "ZZTO_FCR", "db": "to_amount"},
+            {"sap": "AMOUNT", "db": "amount"}
+        ]
+    },
+    "mortality_deduction_plant": {
+        "sapEndpoint": "ZBRO_MOR_DED_P",
+        "pgTable": "mortality_deduction_plant",
+        "primaryKey":["client", "plant", "from_amount","to_amount"],
+        "sapPrimaryKey": "ZZFRMO_FCR",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZZFRMO_FCR", "db": "from_amount"},
+            {"sap": "ZZTO_FCR", "db": "to_amount"},
+            {"sap": "AMOUNT", "db": "amount"}
+        ]
+    },
+    "medicine_deduction_maintain_plant": {
+        "sapEndpoint": "ZBRO_MED_FCR_P",
+        "pgTable": "medicine_deduction_maintain_plant",
+        "primaryKey": ["client", "plant","wrbtr_amount","wrbtr_p_amount"],
+        "sapPrimaryKey": "WERKS",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "WRBTR", "db": "wrbtr_amount"},
+            {"sap": "WRBTR_p", "db": "wrbtr_p_amount"}
+        ]
+    },
+    "earned_rc_cfcr_p": {
+        "sapEndpoint": "ZBRO_CFCR_P",
+        "pgTable": "earned_rc_cfcr_p",
+        "primaryKey":["client", "plant","db_field_name","erc_amount"],
+        "sapPrimaryKey": "ZSEL",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZSEL", "db": "db_field_name"},
+            {"sap": "ZERC", "db": "erc_amount"},
+            {"sap": "ZNEW_GC", "db": "new_gc_amount"}
+        ]
+    },
+    "earned_rc_eer_p": {
+        "sapEndpoint": "ZBRO_EER_P",
+        "pgTable": "earned_rc_eer_p",
+        "primaryKey":["client", "plant","db_field_name","erc_amount"],
+        "sapPrimaryKey": "ZSEL",
+        "fields": [
+            {"sap": "MANDT", "db": "client"},
+            {"sap": "WERKS", "db": "plant"},
+            {"sap": "ZSEL", "db": "db_field_name"},
+            {"sap": "ZERC", "db": "erc_amount"},
+            {"sap": "ZNEW_GC", "db": "new_gc_amount"}
+        ]
+    }
+}

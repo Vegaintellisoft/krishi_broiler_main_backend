@@ -1,0 +1,562 @@
+{
+    "issue_medicine": {
+        "sapEndpoint_get": "/feed_medicine/zmed_issue",
+        "sapEndpoint": "/feed_medicine/zfeed_transfer",
+        "pgTable": "issue_medicine_dc",
+        "fields": [
+            {
+                "sap": "indType",
+                "body_key": "ind_type"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzstock",
+                "body_key": "bird_stock"
+            },
+            {
+                "sap": "zzAge",
+                "body_key": "age"
+            },
+            {
+                "sap": "mandcno",
+                "body_key": "manual_dc"
+            },
+            {
+                "sap": "zcrtby",
+                "body_key": "create_by"
+            },
+            {
+                "sap": "matnr",
+                "body_key": "material"
+            },
+            {
+                "sap": "trQty",
+                "body_key": "issue_quantity"
+            },
+            {
+                "sap": "lgort",
+                "body_key": "storage_loc"
+            }
+        ]
+    },
+    "feed_transfer": {
+        "sapEndpoint": "/feed_medicine/zfeed_transfer",
+        "pgTable": "feed_transfer_dc",
+        "fields": [
+            {
+                "sap": "indType",
+                "body_key": "ind_type"
+            },
+            {
+                "sap": "erdat",
+                "body_key": "date"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "venum",
+                "body_key": "vehicle_no"
+            },
+            {
+                "sap": "feedType",
+                "body_key": "transfer_type"
+            },
+            {
+                "sap": "iftCharge",
+                "body_key": "ift_charges"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "from_farmer"
+            },
+            {
+                "sap": "lifnrT",
+                "body_key": "to_farmer"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "from_batch"
+            },
+            {
+                "sap": "zshedBatT",
+                "body_key": "to_batch"
+            },
+            {
+                "sap": "zzstock",
+                "body_key": "from_bird_stock"
+            },
+            {
+                "sap": "zzstockT",
+                "body_key": "to_bird_stock"
+            },
+            {
+                "sap": "zzAge",
+                "body_key": "from_age"
+            },
+            {
+                "sap": "zzAge1",
+                "body_key": "to_age"
+            },
+            {
+                "sap": "matnr",
+                "body_key": "material"
+            },
+            {
+                "sap": "trQty",
+                "body_key": "qty"
+            },
+            {
+                "sap": "lgort",
+                "body_key": "storage_loc"
+            }
+        ]
+    },
+    "feed_request": {
+        "sapEndpoint": "/feed_medicine/zrequest_form",
+        "pgTable": "feed_request_dc",
+        "fields": []
+    },
+    "shed_ready": {
+        "sapEndpoint": "/zbroiler_shed",
+        "pgTable": "shed_ready",
+        "fields": [
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "budat",
+                "body_key": "date"
+            },
+            {
+                "sap": "zprevbatch",
+                "body_key": "previous_batch"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzFwidth",
+                "body_key": "farm_width"
+            },
+            {
+                "sap": "zzFlength",
+                "body_key": "farm_length"
+            },
+            {
+                "sap": "zzChc",
+                "body_key": "chick_house_capacity"
+            },
+            {
+                "sap": "zzChcUti",
+                "body_key": "chick_excess_housed"
+            }
+        ]
+    },
+    "bill_of_supply": {
+        "sapEndpoint": "/zbos",
+        "pgTable": "bill_of_supply_dc",
+        "fields": [
+            {
+                "sap": "recDt",
+                "body_key": "date"
+            },
+            {
+                "sap": "zzcusType",
+                "body_key": "customer_type"
+            },
+            {
+                "sap": "zbDocno",
+                "body_key": "dc_no"
+            },
+            {
+                "sap": "kunnr",
+                "body_key": "customer"
+            },
+            {
+                "sap": "name1Gp",
+                "body_key": "customer_name"
+            },
+            {
+                "sap": "kunnrName",
+                "body_key": "customer_name"
+            },
+            {
+                "sap": "zzsalType",
+                "body_key": "sales_type"
+            },
+            {
+                "sap": "zztransBy",
+                "body_key": "transport_by"
+            },
+            {
+                "sap": "venum",
+                "body_key": "vehicle_no"
+            },
+            {
+                "sap": "zzorderBy",
+                "body_key": "order_by"
+            },
+            {
+                "sap": "zzorderByN",
+                "body_key": "order_by_name"
+            },
+            {
+                "sap": "zzorderByName",
+                "body_key": "order_by_name"
+            },
+            {
+                "sap": "zzdispBy",
+                "body_key": "dispatch_by"
+            },
+            {
+                "sap": "zzdispByN",
+                "body_key": "dispatch_by_name"
+            },
+            {
+                "sap": "zzdispByName",
+                "body_key": "dispatch_by_name"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "name1",
+                "body_key": "farmer_name"
+            },
+            {
+                "sap": "lifnrName",
+                "body_key": "farmer_name"
+            },
+            {
+                "sap": "zzline",
+                "body_key": "line_no"
+            },
+            {
+                "sap": "zzlineN",
+                "body_key": "line_no_name"
+            },
+            {
+                "sap": "zeile",
+                "body_key": "farm_shed_no"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzAge",
+                "body_key": "age"
+            },
+            {
+                "sap": "zzstock",
+                "body_key": "bird_stock"
+            },
+            {
+                "sap": "netpr",
+                "body_key": "rate"
+            },
+            {
+                "sap": "zzempWght",
+                "body_key": "emptyWeight"
+            },
+            {
+                "sap": "zzloadWght",
+                "body_key": "loadWeight"
+            },
+            {
+                "sap": "weight",
+                "body_key": "weight"
+            },
+            {
+                "sap": "zznoCages",
+                "body_key": "cage"
+            },
+            {
+                "sap": "fkimg",
+                "body_key": "birdQty"
+            },
+            {
+                "sap": "zzAngWt",
+                "body_key": "average_weight"
+            },
+            {
+                "sap": "netwr",
+                "body_key": "bill_value"
+            }
+        ]
+    },
+    "chick_receipt": {
+        "sapEndpoint": "/zchick_receipt",
+        "pgTable": "chick_receipt_dc",
+        "fields": [
+            {
+                "sap": "recDt",
+                "body_key": "date"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "dcno",
+                "body_key": "dc_no"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzChc",
+                "body_key": "chick_housed_capacity"
+            },
+            {
+                "sap": "erfmg",
+                "body_key": "chick_transfer_quantity"
+            },
+            {
+                "sap": "enmng",
+                "body_key": "received_quantity"
+            },
+            {
+                "sap": "mortality",
+                "body_key": "mortality"
+            },
+            {
+                "sap": "remarks",
+                "body_key": "remarks"
+            },
+            {
+                "sap": "grno",
+                "body_key": "gr_no"
+            },
+            {
+                "sap": "zeile",
+                "body_key": "item_in_material_doc"
+            },
+            {
+                "sap": "mblnr",
+                "body_key": "no_of_material_doc"
+            },
+            {
+                "sap": "mjahr",
+                "body_key": "fiscal_year"
+            },
+            {
+                "sap": "ebeln",
+                "body_key": "purchase_doc_no"
+            },
+            {
+                "sap": "ebelp",
+                "body_key": "item_no_of_purchase_doc"
+            },
+            {
+                "sap": "rspos",
+                "body_key": "item_no_of_reservation"
+            }
+        ]
+    },
+    "farm_activity": {
+        "sapEndpoint": "/zdaily_mort",
+        "pgTable": "farm_activity",
+        "fields": [
+            {
+                "sap": "recDt",
+                "body_key": "date"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "zzrunKm",
+                "body_key": "running_km"
+            },
+            {
+                "sap": "zztotFarm",
+                "body_key": "total_farms"
+            },
+            {
+                "sap": "zzvehNo",
+                "body_key": "vehicle_no"
+            },
+            {
+                "sap": "zzopenKm",
+                "body_key": "start_km"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "zzinTime",
+                "body_key": "in_time"
+            },
+            {
+                "sap": "zzoutTime",
+                "body_key": "out_time"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzAge",
+                "body_key": "age"
+            },
+            {
+                "sap": "zzchkHoused",
+                "body_key": "housed"
+            },
+            {
+                "sap": "zzchkStk",
+                "body_key": "stock"
+            },
+            {
+                "sap": "zzfmQlty",
+                "body_key": "farm_maintenance"
+            },
+            {
+                "sap": "zzltrQlty",
+                "body_key": "litter_quality"
+            },
+            {
+                "sap": "zzdcQlty",
+                "body_key": "drinker_cleaning"
+            },
+            {
+                "sap": "zzBwt",
+                "body_key": "body_weight"
+            },
+            {
+                "sap": "zzMortnos",
+                "body_key": "mortality"
+            },
+            {
+                "sap": "RS_CODE",
+                "body_key": "reason"
+            },
+            {
+                "sap": "RS_TXT",
+                "body_key": "reason_text"
+            },
+            {
+                "sap": "remarks",
+                "body_key": "treatment"
+            },
+            {
+                "sap": "zzCum",
+                "body_key": "cum_mortality_count"
+            },
+            {
+                "sap": "zzCumPer",
+                "body_key": "cum_mortality_percentage"
+            },
+            {
+                "sap": "matnr",
+                "body_key": "material"
+            },
+            {
+                "sap": "zzTcKgs",
+                "body_key": "quantity_bags"
+            },
+            {
+                "sap": "zzTfs",
+                "body_key": "stock_bags"
+            },
+            {
+                "sap": "zzFBags",
+                "body_key": "cum_feed"
+            },
+            {
+                "sap": "zzTdyCons",
+                "body_key": "total_feed"
+            },
+            {
+                "sap": "zzDfiag",
+                "body_key": "dfi_act_grams"
+            },
+            {
+                "sap": "zzclosKm",
+                "body_key": "end_km"
+            },
+            {
+                "sap": "zzFbdg",
+                "body_key": "feed_bag_given"
+            },
+            {
+                "sap": "zzCumF",
+                "body_key": "cum_feed_given"
+            }
+        ]
+    },
+    "feed_return": {
+        "sapEndpoint": "/feed_medicine/zfeed_transfer",
+        "pgTable": "feed_return_dc",
+        "fields": [
+            {
+                "sap": "indType",
+                "body_key": "ind_type"
+            },
+            {
+                "sap": "erdat",
+                "body_key": "date"
+            },
+            {
+                "sap": "werks",
+                "body_key": "plant"
+            },
+            {
+                "sap": "lifnr",
+                "body_key": "farmer"
+            },
+            {
+                "sap": "zshedBat",
+                "body_key": "batch"
+            },
+            {
+                "sap": "zzstock",
+                "body_key": "bird_stock"
+            },
+            {
+                "sap": "matnr",
+                "body_key": "material"
+            },
+            {
+                "sap": "trQty",
+                "body_key": "quantity"
+            },
+            {
+                "sap": "lgort",
+                "body_key": "storage_loc"
+            }
+        ]
+    }
+}

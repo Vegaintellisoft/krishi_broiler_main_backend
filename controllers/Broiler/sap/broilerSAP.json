@@ -1,0 +1,261 @@
+{
+    "plant": {
+        "sapEndpoint": "mobile_app/shed_ready/get_plant",
+        "pgTable": "plant",
+        "primaryKey": [
+            "plant_id"
+        ],
+        "sapPrimaryKey": "key",
+        "fields": [
+            {
+                "sap": "key",
+                "db": "plant_id"
+            },
+            {
+                "sap": "text",
+                "db": "plant_name"
+            }
+        ]
+    },
+    "farmer": {
+        "sapEndpoint": "zfarm_det",
+        "pgTable": "farmer",
+        "primaryKey": [
+            "client",
+            "plant",
+            "farmer_no"
+        ],
+        "sapPrimaryKey": "zfarmNo",
+        "fields": [
+            {
+                "sap": "mandt",
+                "db": "client"
+            },
+            {
+                "sap": "werks",
+                "db": "plant"
+            },
+            {
+                "sap": "zfarmno",
+                "db": "farmer_no"
+            },
+            {
+                "sap": "name1",
+                "db": "farmer_name"
+            },
+            {
+                "sap": "lifnr",
+                "db": "farmer_supplier"
+            },
+            {
+                "sap": "zzline",
+                "db": "line_no"
+            },
+            {
+                "sap": "zzlinen",
+                "db": "line_name"
+            },
+            {
+                "sap": "zzfownname",
+                "db": "owner_name"
+            },
+            {
+                "sap": "zzfownmobno",
+                "db": "owner_mobile_no"
+            },
+            {
+                "sap": "zzfarmtyp",
+                "db": "farm_type"
+            },
+            {
+                "sap": "zzflength",
+                "db": "farm_length"
+            },
+            {
+                "sap": "zzfwidth",
+                "db": "farm_width"
+            },
+            {
+                "sap": "zzfcap",
+                "db": "farm_capacity"
+            },
+            {
+                "sap": "zzchc",
+                "db": "farm_chick_house_capacity"
+            },
+            {
+                "sap": "status",
+                "db": "farm_status"
+            }
+        ]
+    },
+    "employee": {
+        "sapEndpoint": "emp_master",
+        "pgTable": "employee",
+        "primaryKey": [
+            "emp_id"
+        ],
+        "sapPrimaryKey": "pernr",
+        "fields": [
+            {
+                "sap": "pernr",
+                "db": "emp_id"
+            },
+            {
+                "sap": "sname",
+                "db": "emp_name"
+            }
+        ]
+    },
+    "material": {
+        "sapEndpoint": "masters/material",
+        "pgTable": "material",
+        "primaryKey": [
+            "plant",
+            "material_id"
+        ],
+        "sapPrimaryKey": "matnr",
+        "fields": [
+            {
+                "sap": "werks",
+                "db": "plant"
+            },
+            {
+                "sap": "matnr",
+                "db": "material_id"
+            },
+            {
+                "sap": "maktx",
+                "db": "material_name"
+            },
+            {
+                "sap": "lgort",
+                "db": "storage_location"
+            },
+            {
+                "sap": "meins",
+                "db": "uom"
+            },
+            {
+                "sap": "labst",
+                "db": "stock"
+            }
+        ]
+    },
+    "chick_delivery": {
+        "sapEndpoint": "chick_grn",
+        "pgTable": "chick_delivery",
+        "primaryKey": [
+            "client",
+            "plant",
+            "dc_no",
+            "farmer",
+            "batch"
+        ],
+        "sapPrimaryKey": "dcno",
+        "fields": [
+            {
+                "sap": "mandt",
+                "db": "client"
+            },
+            {
+                "sap": "werks",
+                "db": "plant"
+            },
+            {
+                "sap": "grno",
+                "db": "gr_no"
+            },
+            {
+                "sap": "dcno",
+                "db": "dc_no"
+            },
+            {
+                "sap": "lifnr",
+                "db": "farmer"
+            },
+            {
+                "sap": "name1",
+                "db": "farmer_name"
+            },
+            {
+                "sap": "zshedbat",
+                "db": "batch"
+            },
+            {
+                "sap": "zzchc",
+                "db": "chick_quantity"
+            },
+            {
+                "sap": "bldat",
+                "db": "document_date"
+            },
+            {
+                "sap": "budat",
+                "db": "posting_date"
+            },
+            {
+                "sap": "zeile",
+                "db": "item_in_material_doc"
+            },
+            {
+                "sap": "mblnr",
+                "db": "no_of_material_doc"
+            },
+            {
+                "sap": "mjahr",
+                "db": "fiscal_year"
+            },
+            {
+                "sap": "ebeln",
+                "db": "purchase_doc_no"
+            },
+            {
+                "sap": "ebelp",
+                "db": "item_no_of_purchase_doc"
+            },
+            {
+                "sap": "rspos",
+                "db": "item_no_of_reservation"
+            },
+            {
+                "sap": "erfmg",
+                "db": "gr_quantity"
+            },
+            {
+                "sap": "enmng",
+                "db": "quantity_withdrawn"
+            },
+            {
+                "sap": "mortality",
+                "db": "mortality"
+            }
+        ]
+    },
+    "customer": {
+        "sapEndpoint": "customer",
+        "pgTable": "customer",
+        "primaryKey": [
+            "customer_no"
+        ],
+        "sapPrimaryKey": "kunnr",
+        "fields": [
+            {
+                "sap": "kunnr",
+                "db": "customer_no"
+            },
+            {
+                "sap": "name1",
+                "db": "customer_name"
+            },
+            {
+                "sap": "stcd1",
+                "db": "gst_no"
+            },
+            {
+                "sap": "smtp_addr",
+                "db": "email"
+            }
+        ]
+    }
+}

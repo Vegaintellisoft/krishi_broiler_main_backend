@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Delivery Challan</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #fff;
+        }
+
+        .container {
+            width: 900px;
+            margin: auto;
+            border: 2px solid #000;
+            padding: 10px;
+        }
+
+
+        .header {
+            display: flex;
+            align-items: center;
+            border-bottom: 2px solid #000;
+            padding: 15px;
+        }
+
+        .company-logo {
+            width: 160px;
+            height: auto;
+        }
+
+        .company-details {
+            margin-left: 40px;
+            font-size: 14px;
+            line-height: 1.8;
+            font-weight: 700;
+        }
+
+        .title {
+            text-align: center;
+            font-weight: bold;
+            padding: 6px;
+            margin-top: 5px;
+            background-color: #f2e500
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 5px;
+            font-size: 14px;
+        }
+
+        td,
+        th {
+            padding: 6px;
+        }
+
+        .section {
+            border: 2px solid #000;
+        }
+
+        .section td,
+        .section th {
+            border: none;
+            text-align: center;
+        }
+
+        .spaced td {
+            padding: 12px;
+            line-height: 2;
+        }
+
+        .border-right {
+            border-right: 2px solid #000;
+        }
+
+        .border-top {
+            border-top: 2px solid #000;
+        }
+
+        .border-bottom {
+            border-bottom: 2px solid #000;
+        }
+
+        .left {
+            text-align: left;
+        }
+
+        .center {
+            text-align: center;
+        }
+
+        .amount {
+            text-align: right;
+            font-weight: bold;
+            padding-right: 10px;
+            line-height: 2;
+        }
+
+        .footer {
+            text-align: center;
+            border-top: 2px solid #000;
+            margin-top: 10px;
+            padding-top: 5px;
+            font-size: 12px;
+        }
+
+        .summary-table { border: 1px solid #000; border-collapse: collapse; margin-top: 10px; }
+        .summary-table td, .summary-table th { border: 1px solid #000; padding: 5px; text-align: center; }
+        .summary-table .label { text-align: center; font-weight: bold; }
+    </style>
+</head>
+
+<body>
+
+    <div class="container">
+
+        <div class="header">
+            <img class="company-logo" src="https://i.postimg.cc/L5VKhNt5/Logo-2.png" alt="Krishi Logo" />
+            <div class="company-details">
+                <%= plant_details.company || 'KRISHI NUTRITION COMPANY PRIVATE LIMITED' %><br>
+                Bill From : 
+                <% 
+                   var addrParts = [];
+                   if (plant_details.street) addrParts.push(plant_details.street.trim().replace(/,\s*$/, ''));
+                   if (plant_details.str1) addrParts.push(plant_details.str1.trim().replace(/,\s*$/, ''));
+                   if (plant_details.str2) addrParts.push(plant_details.str2.trim().replace(/,\s*$/, ''));
+                   if (plant_details.city) addrParts.push(plant_details.city.trim().replace(/,\s*$/, ''));
+                   var plantAddr = addrParts.join(', ');
+                   if (plant_details.pincode) plantAddr += ' - ' + plant_details.pincode.trim();
+                   if (!plantAddr.trim()) {
+                       plantAddr = 'D.NO.4/119A, MUTHU ACHARI STREET, NEAR GEETHANJALI PRIMARY SCHOOL, KAVERIPATTINAM, KRISHNAGIRI (DT), TAMIL NADU - 635112';
+                   }
+                %>
+                <%= plantAddr %><br>
+                GST/IN No.: <%= plant_details.gst || '33AAFCK3415K1ZO' %> <br>
+                <p>DOC. No. : <%= doc_no %> </p>
+            </div>
+        </div>
+
+        <div class="title">
+            Delivery Challan (only for stock movement within the state)
+        </div>
+
+        <!-- DC / Date / Remarks -->
+        <table class="section">
+            <tr class="border-bottom">
+                <td class="border-right left"><b>DC No:</b> <%= dc_no %> </td>
+                <td class="border-right center">
+                    <% if (typeof sap_post_date !== 'undefined' && sap_post_date && sap_post_date !== '-') { %>
+                        <b>Date:</b> <%= sap_post_date %>
+                    <% } else { %>
+                        <b>Date:</b> <%= date %>
+                    <% } %>
+                </td>
+                <td class="left"><b>Remarks</b></td>
+            </tr>
+            <tr>
+                <td class="border-right left"  style="text-align: left">
+                    <b>Shipped From (Farm):</b><br>
+                    <%= farmer_details.farmer_name %><br>
+                    <% if (typeof farmer_details.street !== 'undefined' && farmer_details.street) { %>
+                        <%= farmer_details.street %><br>
+                    <% } %>
+                    <% if (typeof farmer_details.street2 !== 'undefined' && farmer_details.street2) { %>
+                        <%= farmer_details.street2 %><br>
+                    <% } %>
+                    <% if (typeof farmer_details.street3 !== 'undefined' && farmer_details.street3) { %>
+                        <%= farmer_details.street3 %><br>
+                    <% } %>
+                    <% if ((typeof farmer_details.district !== 'undefined' && farmer_details.district) || (typeof farmer_details.pincode !== 'undefined' && farmer_details.pincode)) { %>
+                        <% if (farmer_details.district) { %><%= farmer_details.district %><% } %><% if (farmer_details.district && farmer_details.pincode) { %> - <% } %><% if (farmer_details.pincode) { %><%= farmer_details.pincode %><% } %><br>
+                    <% } %>
+                </td>
+                <td colspan="2" class="left"  style="text-align: left">
+                    <b>Bill / Delivery To:</b><br>
+                    <%= customer_details.customer_name %><br>
+                    <%= customer_details.street1 %><br>
+                    <%= customer_details.street2 %>, <%= customer_details.city %> - <%= customer_details.pincode %><br>
+                    <% if (customer_details.gst_no) { %><b>GST No:</b> <%= customer_details.gst_no %><br><% } %>
+                    <% if (customer_details.email) { %><b>Email:</b> <%= customer_details.email %><% } %>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Birds Table -->
+        <table class="section">
+            <thead>
+                <tr class="border-bottom">
+                    <th>S.No</th>
+                    <th>CAGE (No)</th>
+                    <th>No. of Birds</th>
+                    <th>EMPTY WT (kgs)</th>
+                    <th>LOAD WT (kgs)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <% 
+                   var totalCage = 0;
+                   var totalBirds = 0;
+                   var totalEmpty = 0;
+                   var totalLoad = 0;
+                   for(var i=0; i<load_details.length; i++){
+                       totalCage += Number(load_details[i].cage || 0);
+                       totalBirds += Number(load_details[i].birdQty || 0);
+                       totalEmpty += parseFloat(load_details[i].emptyWeight);
+                       totalLoad += parseFloat(load_details[i].loadWeight);
+                %>
+                <tr>
+                    <td><%= i+1 %></td>
+                    <td><%= load_details[i].cage %></td>
+                    <td><%= load_details[i].birdQty %></td>
+                    <td><%= load_details[i].emptyWeight %></td>
+                    <td><%= load_details[i].loadWeight %></td>
+                </tr>
+                <% } %>
+
+                <tr class="border-top">
+                    <td colspan="1">Total</td>
+                    <td><%= totalCage %></td>
+                    <td><%= totalBirds %></td>
+                    <td><%= totalEmpty.toFixed(2) %></td>
+                    <td><%= totalLoad.toFixed(2) %></td>
+                </tr>
+            </tbody>
+        </table>
+
+        <table class="summary-table">
+            <tr>
+                <td class="label">Total Birds</td>
+                <td class="label">Total Cages</td>
+                <td class="label">Total Wt.( KGS)</td>
+                <td class="label">Avg Wt.per bird</td>
+            </tr>
+            <tr>
+                <td><%= totalBirds %></td>
+                <td><%= totalCage %></td>
+                <td><%= net_weight.toFixed(3) %></td>
+                <td><%= average_weight.toFixed(2) %></td>
+            </tr>
+        </table>
+
+
+        <!-- Approx Value -->
+        <table class="section spaced">
+            <tr>
+                <td class="left"  style="text-align: left">
+                    <b>Approx. Rate (Per Kg in Rs.)</b><br>
+                    <b>Approx. Value</b><br>
+                    (Amount in Rs. <%= gross_value_in_words %>)<br>
+                    The approximate value is declared only provisionally and not final value
+                </td>
+                <td class="amount"  style="text-align: left">
+                    <%= rate.toFixed(2) %><br><br>
+                    <%= gross_value.toFixed(2) %>
+                </td>
+            </tr>
+        </table>
+
+        <!-- Vehicle Info -->
+        <table class="section spaced">
+            <tr>
+                <td class="left"  style="text-align: left">
+                    <b>Vehicle No:</b> <%= vehicle_no %><br>
+                    <b>Driver Name:</b> <%= driver_name %><br>
+                    <b>Supervisor:</b> <%= supervisor_name %><br>
+                    <b>Weighing Scale No:</b> <%= weight_scale_no %><br>
+                    <b>Start Time:</b> <%= start_time %>
+                </td>
+                <td class="left"  style="text-align: left">
+                    <b>Mobile No:</b> <%= driver_mobile %><br><br>
+                    <b>End Time:</b> <%= end_time %>
+                </td>
+            </tr>
+        </table>
+        <div class="footer">
+            This is a computer generated document and hence does not require signature
+        </div>
+
+    </div>
+
+</body>
+
+</html>

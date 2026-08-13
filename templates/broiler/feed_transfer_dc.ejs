@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <title>Inter Farm Feed Transfer</title>
+    <style>
+        body { font-family: Arial, sans-serif; font-size: 12px; line-height: 1.4; }
+        .header { text-align: center; margin-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; }
+        .main-table td { padding: 8px; border: 1px solid black; }
+        .no-border-top { border-top: none !important; }
+    </style>
+</head>
+
+<body>
+
+    <div class="header">
+        <strong>KRISHI NUTRITION COMPANY PRIVATE LIMITED</strong><br />
+        <u><strong>INTER FARM FEED TRANSFER</strong></u>
+        &nbsp;&nbsp;&nbsp; S.No : <strong><%= doc_no %></strong>
+    </div>
+
+    <br />
+
+    <table width="100%" border="0" cellpadding="2">
+        <tr>
+            <td>Branch &nbsp;: &nbsp;<%= branch %> - <%= branch_name %></td>
+            <td align="right">Date &nbsp;: &nbsp;<%= date %></td>
+        </tr>
+    </table>
+
+    <br />
+
+    <table class="main-table" width="100%" cellpadding="4" cellspacing="0">
+        <tr>
+            <td width="50%" valign="top">
+                <strong><u>From Farm</u></strong><br /><br />
+                Farm Name &nbsp;: &nbsp;<%= from_farmer %> - <%= from_farmer_name %><br /><br />
+                Birds Age &nbsp;: &nbsp;<%= from_age || '—' %><br /><br />
+                Mobile No. &nbsp;: &nbsp;<%= from_mobile %>
+            </td>
+            <td width="50%" valign="top">
+                <strong><u>To Farm</u></strong><br /><br />
+                Farm Name &nbsp;: &nbsp;<%= to_farmer %> - <%= to_farmer_name %><br /><br />
+                Birds Age &nbsp;: &nbsp;<%= to_age || '—' %><br /><br />
+                Mobile No. &nbsp;: &nbsp;<%= to_mobile %>
+            </td>
+        </tr>
+    </table>
+
+    <%
+        const feedMap = {};
+        feed_type.forEach(f => feedMap[f.type] = f.qty);
+    %>
+
+    <table class="main-table no-border-top" width="100%" cellpadding="4" cellspacing="0">
+        <tr>
+            <td width="50%">SHIFTING TYPE &nbsp;: &nbsp;<%= transfer_type %></td>
+            <td width="50%">DISTANCE KM &nbsp;: &nbsp;<%= distance %> km</td>
+        </tr>
+        <tr>
+            <td>
+                <table border="1" cellspacing="0" cellpadding="3" style="display:inline-table; margin-left:1px;">
+                    <tr>
+                        <td>FEED TYPE</td>
+                        <td>PBS</td>
+                        <td>BS</td>
+                        <td>BF</td>
+                    </tr>
+                    <tr>
+                        <td>FEED QTY</td>
+                        <td><%= feedMap['PBS'] || 0 %></td>
+                        <td><%= feedMap['BS'] || 0 %></td>
+                        <td><%= feedMap['BF'] || 0 %></td>
+                    </tr>
+                </table>
+            </td>
+            <td>FREIGHT AMT &nbsp;: &nbsp;Rs. <%= freightAmt %></td>
+        </tr>
+        <tr>
+            <td colspan="2">VEHICLE NO. &nbsp;: &nbsp;<%= vehicle_no %></td>
+        </tr>
+        <tr>
+            <td colspan="2">
+                NO. OF BAGS &nbsp;: &nbsp;<%= transfer_quantity %> &nbsp;&nbsp;&nbsp;&nbsp;
+                LOOSE KGS &nbsp;: &nbsp;<%= looseKgs || '—' %> &nbsp;&nbsp;&nbsp;&nbsp;
+                TOTAL KGS &nbsp;: &nbsp;<%= totalKgs %>
+            </td>
+        </tr>
+    </table>
+
+    <br /><br /><br />
+
+    <table width="100%" border="0" cellpadding="2">
+        <tr>
+            <td width="25%" align="center">
+                _______________<br />
+                From Farmer
+            </td>
+            <td width="25%" align="center">
+                _______________<br />
+                LS
+            </td>
+            <td width="25%" align="center">
+                _______________<br />
+                BM
+            </td>
+            <td width="25%" align="center">
+                _______________<br />
+                To Farmer
+            </td>
+        </tr>
+    </table>
+
+</body>
+
+</html>
