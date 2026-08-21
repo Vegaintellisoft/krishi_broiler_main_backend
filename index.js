@@ -24,6 +24,7 @@ const breederRoutes = require("./routes/Breeder/breederRoutes");
 const feedDetailsRoutes = require('./routes/Breeder/feedDetailsRoutes');
 
 const app = express();
+app.set('trust proxy', true);
 app.use(express.json());
 app.use(cors());
 app.set('view cache', false);

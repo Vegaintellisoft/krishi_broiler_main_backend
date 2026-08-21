@@ -68,15 +68,39 @@ exports.login = async (req, res) => {
             });
         }
 
-        // ✅ Category-based user lookup
-        const result = await query(
-            "SELECT * FROM Admin WHERE username = $1 AND category = $2",
+        // 1. First search in Admin table (case-insensitive username/email & category)
+        let result = await query(
+            "SELECT * FROM public.admin WHERE (LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1))) AND LOWER(TRIM(category)) = LOWER(TRIM($2))",
             [username, category]
         );
 
-        console.log(result)
+        let userSource = 'admin';
+
+        // 2. If not found in Admin table, search in Driver / User Master table
+        if (result.length === 0) {
+            result = await query(
+                `SELECT * FROM public.driver 
+                 WHERE (LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1)) OR mobile = $1) 
+                   AND LOWER(TRIM(category)) = LOWER(TRIM($2))`,
+                [username, category]
+            );
+            userSource = 'driver';
+        }
 
         if (result.length === 0) {
+            // Check if user exists under a different category
+            const catCheck = await query(
+                `SELECT category FROM public.admin WHERE LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1))
+                 UNION
+                 SELECT category FROM public.driver WHERE LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1)) OR mobile = $1`,
+                [username]
+            );
+            if (catCheck.length > 0) {
+                return res.status(401).json({
+                    status: false,
+                    message: `Category mismatch: This user is registered under '${catCheck[0].category}'. Please select '${catCheck[0].category}'.`
+                });
+            }
             return res.status(401).json({
                 status: false,
                 message: `Invalid credentials for category: ${category}`
@@ -85,52 +109,65 @@ exports.login = async (req, res) => {
 
         const user = result[0];
 
+        // Check active status
+        const isActive = user.status === true || user.status === 'true' || user.status === 'active' || user.status === 1;
+        if (!isActive) {
+            return res.status(403).json({ status: false, message: "Inactive user account. Contact admin" });
+        }
+
+        // Verify password with bcrypt
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(401).json({ status: false, message: "Invalid username or password" });
         }
 
-        if (!user.status) {
-            return res.status(403).json({ status: false, message: "Inactive user. Contact admin" });
-        }
-
-        // 🔹 Fetch role permissions
+        // Fetch role permissions (case-insensitive)
         const rolePermissionsResult = await query(
-            "SELECT permissions FROM public.user_roles WHERE role_name = $1 AND category = $2",
+            "SELECT permissions FROM public.user_roles WHERE LOWER(TRIM(role_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(category)) = LOWER(TRIM($2))",
             [user.role, user.category]
         );
 
         if (rolePermissionsResult.length === 0) {
-            return res.status(404).json({ status: false, message: "Role not found" });
+            return res.status(404).json({ status: false, message: `Role '${user.role}' not found for category '${user.category}'` });
         }
 
-        const permissions = rolePermissionsResult[0].permissions;
+        let permissions = rolePermissionsResult[0].permissions;
+        if (typeof permissions === 'string') {
+            try { permissions = JSON.parse(permissions); } catch (_) {}
+        }
 
-        // 🔹 Update last login timestamp
-        await query("UPDATE public.admin SET last_login = CURRENT_TIMESTAMP WHERE id = $1", [user.id]);
+        // Update last login
+        if (userSource === 'admin') {
+            await query("UPDATE public.admin SET last_login = CURRENT_TIMESTAMP WHERE id = $1", [user.id]).catch(() => {});
+        }
 
         // Log successful login
+        const fullName = userSource === 'admin'
+            ? `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.username
+            : user.fullname || user.username;
+
         await query(
             `INSERT INTO public.user_login_logs (username, fullname, role, category) 
              VALUES ($1, $2, $3, $4)`,
-            [user.username, user.first_name + " " + user.last_name, user.role, user.category]
+            [user.username, fullName, user.role, user.category]
         ).catch(err => console.error("Error logging admin login:", err));
 
-        // 🔹 Fetch location_id (if exists)
-        const locationResult = await query(
-            "SELECT id FROM public.source_location WHERE admin_id = $1 LIMIT 1",
-            [user.id]
-        );
-
-        const location_id = locationResult.length > 0 ? locationResult[0].id : null;
+        // Fetch location_id (if exists)
+        let location_id = null;
+        if (userSource === 'admin') {
+            const locRes = await query("SELECT id FROM public.source_location WHERE admin_id = $1 LIMIT 1", [user.id]);
+            location_id = locRes.length > 0 ? locRes[0].id : null;
+        } else {
+            location_id = user.plant_id || user.location_id || null;
+        }
 
         user.location_id = location_id;
 
-        // 🔹 JWT now includes category for verification in protected routes
+        // JWT token includes user details and source
         const token = jwt.sign(
-            { id: user.id, username: user.username, role: user.role, category: user.category },
+            { id: user.id, username: user.username, role: user.role, category: user.category, source: userSource },
             JWT_SECRET,
-            { expiresIn: "1h" }
+            { expiresIn: "12h" }
         );
 
         delete user.password;
@@ -144,7 +181,7 @@ exports.login = async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
+        console.error("Error during login:", error);
         res.status(500).json({
             status: false,
             message: "Error during login",
@@ -380,20 +417,33 @@ exports.changePassword = async (req, res) => {
         const { id } = req.params;
 
         if (!id) {
-            return res.status(400).json({ status: false, message: "Admin ID is required" });
+            return res.status(400).json({ status: false, message: "User ID is required" });
         }
         if (!currentPassword || !newPassword) {
             return res.status(400).json({ status: false, message: "Current password and new password are required" });
         }
 
-        const existingAdmin = await query("SELECT * FROM public.admin WHERE id = $1", [id]);
-        if (existingAdmin.length === 0) {
-            return res.status(404).json({ status: false, message: "Admin not found" });
+        // Check admin table first, then driver table (role-based/mobile users)
+        let user = null;
+        let userTable = null;
+
+        const adminRows = await query("SELECT * FROM public.admin WHERE id = $1", [id]);
+        if (adminRows.length > 0) {
+            user = adminRows[0];
+            userTable = "public.admin";
+        } else {
+            const driverRows = await query("SELECT * FROM public.driver WHERE id = $1", [id]);
+            if (driverRows.length > 0) {
+                user = driverRows[0];
+                userTable = "public.driver";
+            }
         }
 
-        const admin = existingAdmin[0];
+        if (!user) {
+            return res.status(404).json({ status: false, message: "User not found" });
+        }
 
-        const isMatch = await bcrypt.compare(currentPassword, admin.password);
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
         if (!isMatch) {
             return res.status(400).json({ status: false, message: "Incorrect current password" });
         }
@@ -401,7 +451,10 @@ exports.changePassword = async (req, res) => {
         const saltRounds = 10;
         const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
-        await query("UPDATE public.admin SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [hashedPassword, id]);
+        await query(
+            `UPDATE ${userTable} SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+            [hashedPassword, id]
+        );
 
         res.status(200).json({
             status: true,
