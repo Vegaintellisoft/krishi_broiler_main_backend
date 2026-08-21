@@ -160,27 +160,31 @@
             <tr>
                 <td class="border-right left"  style="text-align: left">
                     <b>Shipped From (Farm):</b><br>
-                    <%= farmer_details.farmer_name %><br>
-                    <% if (typeof farmer_details.street !== 'undefined' && farmer_details.street) { %>
+                    <%= (typeof farmer_details !== 'undefined' && farmer_details && farmer_details.farmer_name) ? farmer_details.farmer_name : ((typeof farmer_name !== 'undefined' && farmer_name) ? farmer_name : '-') %><br>
+                    <% if (typeof farmer_details !== 'undefined' && farmer_details && farmer_details.street) { %>
                         <%= farmer_details.street %><br>
                     <% } %>
-                    <% if (typeof farmer_details.street2 !== 'undefined' && farmer_details.street2) { %>
+                    <% if (typeof farmer_details !== 'undefined' && farmer_details && farmer_details.street2) { %>
                         <%= farmer_details.street2 %><br>
                     <% } %>
-                    <% if (typeof farmer_details.street3 !== 'undefined' && farmer_details.street3) { %>
+                    <% if (typeof farmer_details !== 'undefined' && farmer_details && farmer_details.street3) { %>
                         <%= farmer_details.street3 %><br>
                     <% } %>
-                    <% if ((typeof farmer_details.district !== 'undefined' && farmer_details.district) || (typeof farmer_details.pincode !== 'undefined' && farmer_details.pincode)) { %>
+                    <% if (typeof farmer_details !== 'undefined' && farmer_details && (farmer_details.district || farmer_details.pincode)) { %>
                         <% if (farmer_details.district) { %><%= farmer_details.district %><% } %><% if (farmer_details.district && farmer_details.pincode) { %> - <% } %><% if (farmer_details.pincode) { %><%= farmer_details.pincode %><% } %><br>
                     <% } %>
                 </td>
                 <td colspan="2" class="left"  style="text-align: left">
                     <b>Bill / Delivery To:</b><br>
-                    <%= customer_details.customer_name %><br>
-                    <%= customer_details.street1 %><br>
-                    <%= customer_details.street2 %>, <%= customer_details.city %> - <%= customer_details.pincode %><br>
-                    <% if (customer_details.gst_no) { %><b>GST No:</b> <%= customer_details.gst_no %><br><% } %>
-                    <% if (customer_details.email) { %><b>Email:</b> <%= customer_details.email %><% } %>
+                    <%= (typeof customer_details !== 'undefined' && customer_details && customer_details.customer_name) ? customer_details.customer_name : ((typeof customer_name !== 'undefined' && customer_name) ? customer_name : '-') %><br>
+                    <% if (typeof customer_details !== 'undefined' && customer_details && customer_details.street1) { %>
+                        <%= customer_details.street1 %><br>
+                    <% } %>
+                    <% if (typeof customer_details !== 'undefined' && customer_details && (customer_details.street2 || customer_details.city || customer_details.pincode)) { %>
+                        <%= [customer_details.street2, customer_details.city].filter(Boolean).join(', ') %><% if (customer_details.pincode) { %> - <%= customer_details.pincode %><% } %><br>
+                    <% } %>
+                    <% if (typeof customer_details !== 'undefined' && customer_details && customer_details.gst_no) { %><b>GST No:</b> <%= customer_details.gst_no %><br><% } %>
+                    <% if (typeof customer_details !== 'undefined' && customer_details && customer_details.email) { %><b>Email:</b> <%= customer_details.email %><% } %>
                 </td>
             </tr>
         </table>

@@ -424,7 +424,7 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
         user_id: data.user_id || "test",
         doc_no,
         driver_name: driver_name || "-",
-        supervisor_name: "-",
+        supervisor_name: data.order_by_name || data.order_by || "-",
         weight_scale_no: '-',
         driver_mobile: driver_mobile || "-",
         start_time: "-",
@@ -897,6 +897,36 @@ exports.submit = async (req, res) => {
             }
         }
 
+        // Secondary DB fallback for farmer name if SAP did not resolve it
+        if ((!farmer_name || farmer_name === extractCodeOnly(rest.farmer)) && rest.farmer) {
+            try {
+                const farmDbRows = await query(
+                    `SELECT farmer_name FROM broiler.farmer WHERE farmer_supplier = $1 LIMIT 1`,
+                    [extractCodeOnly(rest.farmer)]
+                );
+                if (farmDbRows.length > 0 && farmDbRows[0].farmer_name) {
+                    farmer_name = farmDbRows[0].farmer_name;
+                }
+            } catch (fDbErr) {
+                console.warn('Farmer name local DB lookup failed:', fDbErr.message);
+            }
+        }
+
+        // Secondary DB fallback for customer name if SAP did not resolve it
+        if ((!customer_name || customer_name === extractCodeOnly(rest.customer)) && rest.customer) {
+            try {
+                const custDbRows = await query(
+                    `SELECT customer_name FROM broiler.customer WHERE customer_no = $1 LIMIT 1`,
+                    [extractCodeOnly(rest.customer)]
+                );
+                if (custDbRows.length > 0 && custDbRows[0].customer_name) {
+                    customer_name = custDbRows[0].customer_name;
+                }
+            } catch (cDbErr) {
+                console.warn('Customer name local DB lookup failed:', cDbErr.message);
+            }
+        }
+
         // Final fallbacks — use code if name still not resolved
         if (!farmer_name)   farmer_name   = extractCodeOnly(rest.farmer)   || '';
         if (!customer_name) customer_name = extractCodeOnly(rest.customer) || '';
@@ -1040,7 +1070,15 @@ exports.submit = async (req, res) => {
             console.log("SAP uploads successful count:", uploadCount);
         }
 
-        const publicUrl = await generateBillOfSupplyPDF({ ...rawData, sap_post_date }, doc_no);
+        const publicUrl = await generateBillOfSupplyPDF({
+            ...rawData,
+            order_by_name,
+            dispatch_by_name,
+            farmer_name,
+            customer_name,
+            line_no_name,
+            sap_post_date
+        }, doc_no);
 
         await query(
             `UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}

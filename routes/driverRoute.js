@@ -6,7 +6,8 @@ const {
     getAll,
     udpateDriver,
     getById,
-    deleteDriver
+    deleteDriver,
+    changePassword
 } = require("../controllers/driverController");
 
 
@@ -17,5 +18,6 @@ router.get("/getAll", getAll);
 router.get("/get/:id", getById);
 router.put("/update/:id", udpateDriver);
 router.delete("/delete/:id", deleteDriver);
+router.put("/change-password/:id", changePassword);
 
 module.exports = router;

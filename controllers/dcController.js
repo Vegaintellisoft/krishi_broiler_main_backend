@@ -728,12 +728,56 @@ const triggerSAPSync = async (dcId) => {
     }
 };
 
+const checkUserDCPermission = async (user_id) => {
+    if (!user_id) return true;
+    try {
+        let userRow = await query(`SELECT role, category FROM public.driver WHERE id = $1`, [user_id]);
+        if (userRow.length === 0) {
+            userRow = await query(`SELECT role, category FROM public.admin WHERE id = $1`, [user_id]);
+        }
+        if (userRow.length === 0) return true;
+
+        const { role, category } = userRow[0];
+        if (!role) return true;
+
+        if (role.trim().toLowerCase() === 'viewer') {
+            return false;
+        }
+
+        const roleRes = await query(
+            `SELECT permissions FROM public.user_roles WHERE LOWER(TRIM(role_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(category)) = LOWER(TRIM($2))`,
+            [role, category || 'Wagon']
+        );
+
+        if (roleRes.length > 0) {
+            let perms = roleRes[0].permissions;
+            if (typeof perms === 'string') {
+                try { perms = JSON.parse(perms); } catch (_) {}
+            }
+            if (perms?.deliveryChallan && perms.deliveryChallan.add === false) {
+                return false;
+            }
+        }
+        return true;
+    } catch (err) {
+        console.error("Error checking DC permission:", err);
+        return true;
+    }
+};
+
 exports.addDC = async (req, res) => {
 
     const { rr_no, token_no, ship_to__id, dispatchFromId, truck_no, materials, pdfLink, doc_no, user_id, invoicePayload } = req.body;
 
     if (!rr_no || !token_no || !ship_to__id || !dispatchFromId || !truck_no || !materials) {
         return res.status(400).json({ status: false, message: 'Missing required fields' });
+    }
+
+    if (user_id) {
+        const canAdd = await checkUserDCPermission(user_id);
+        if (!canAdd) {
+            return res.status(403).json({ status: false, message: 'Your role does not have permission to add Delivery Challan.' });
+        }
     }
 
     // console.log("Invoice Payload: ", invoicePayload);
@@ -1075,6 +1119,14 @@ exports.addDC = async (req, res) => {
 exports.generateChallanPDFByData = async (req, res) => {
     try {
         const { dcData } = req.body;
+
+        const userIdToCheck = req.body.user_id || dcData?.user_id;
+        if (userIdToCheck) {
+            const canAdd = await checkUserDCPermission(userIdToCheck);
+            if (!canAdd) {
+                return res.status(403).json({ status: false, message: 'Your role does not have permission to add Delivery Challan.' });
+            }
+        }
 
         // console.log(dcData);
         // return;

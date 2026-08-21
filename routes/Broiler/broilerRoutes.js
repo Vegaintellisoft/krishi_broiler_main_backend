@@ -13,18 +13,16 @@ const plantRoutes = require("../Broiler/plantRoutes");
 const farmerRoutes = require("../Broiler/farmerRoutes");
 const chickReceiptRoutes = require("../Broiler/chickReceiptRoutes");
 
-const sapRoutes = require("./sapRoutes")
+const sapRoutes = require("./sapRoutes");
 const tentativeRateRoutes = require("./tentativeRateRoutes");
 const sapPostDateConfigRoutes = require("./sapPostDateConfigRoutes");
 const geofenceConfigRoutes = require("./geofenceConfigRoutes");
 const lineFarmRoutes = require("./lineFarmRoutes");
 const farmerLineRoutes = require("./farmerLineRoutes");
 
-
 const router = express.Router();
 
 // group under /api/broiler/*
-
 router.use("/tentative-rate", tentativeRateRoutes);
 router.use("/master", broilerMasterRoutes);
 router.use("/farm-activity", farmActivityRoutes);
@@ -45,6 +43,5 @@ router.use("/sap-post-date-config", sapPostDateConfigRoutes);
 router.use("/geofence-config", geofenceConfigRoutes);
 router.use("/line-farm", lineFarmRoutes);
 router.use("/farmer-line", farmerLineRoutes);
-
 
 module.exports = router;

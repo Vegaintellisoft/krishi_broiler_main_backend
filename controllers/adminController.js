@@ -154,6 +154,66 @@ exports.login = async (req, res) => {
 };
 
 
+exports.getMyPermissions = async (req, res) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        const token = authHeader && authHeader.split(' ')[1];
+
+        if (!token) {
+            return res.status(401).json({ status: false, message: "No token provided" });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(token, JWT_SECRET);
+        } catch (err) {
+            return res.status(401).json({ status: false, message: "Invalid or expired token" });
+        }
+
+        // Fetch user from admin table first, then driver table
+        let userResult = await query(
+            "SELECT role, category FROM public.admin WHERE id = $1",
+            [decoded.id]
+        );
+
+        if (userResult.length === 0) {
+            userResult = await query(
+                "SELECT role, category FROM public.driver WHERE id = $1",
+                [decoded.id]
+            );
+        }
+
+        if (userResult.length === 0) {
+            return res.status(404).json({ status: false, message: "User not found" });
+        }
+
+        const { role, category } = userResult[0];
+
+        // Fetch CURRENT permissions for this role (case-insensitive)
+        const roleResult = await query(
+            "SELECT permissions FROM public.user_roles WHERE LOWER(TRIM(role_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(category)) = LOWER(TRIM($2))",
+            [role, category]
+        );
+
+        if (roleResult.length === 0) {
+            return res.status(404).json({ status: false, message: "Role not found" });
+        }
+
+        let permissions = roleResult[0].permissions;
+
+        if (typeof permissions === 'string') {
+            try { permissions = JSON.parse(permissions); } catch (_) {}
+        }
+
+        return res.status(200).json({ status: true, permissions });
+
+    } catch (error) {
+        console.error("Error fetching permissions:", error);
+        res.status(500).json({ status: false, message: "Error fetching permissions", error: error.message });
+    }
+};
+
+
 exports.getAll = async (req, res) => {
     try {
         const { category } = req.params;
@@ -308,16 +368,95 @@ exports.updateAdmin = async (req, res) => {
             message: "Admin updated successfully",
             data: updatedAdmin
         });
-
     } catch (error) {
-        console.error("Error in updateAdmin:", error);
+        console.error("Error updating admin:", error);
+        res.status(500).json({ status: false, message: "Error while updating admin", error: error.message });
+    }
+};
+
+exports.changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({ status: false, message: "Admin ID is required" });
+        }
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({ status: false, message: "Current password and new password are required" });
+        }
+
+        const existingAdmin = await query("SELECT * FROM public.admin WHERE id = $1", [id]);
+        if (existingAdmin.length === 0) {
+            return res.status(404).json({ status: false, message: "Admin not found" });
+        }
+
+        const admin = existingAdmin[0];
+
+        const isMatch = await bcrypt.compare(currentPassword, admin.password);
+        if (!isMatch) {
+            return res.status(400).json({ status: false, message: "Incorrect current password" });
+        }
+
+        const saltRounds = 10;
+        const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
+
+        await query("UPDATE public.admin SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [hashedPassword, id]);
+
+        res.status(200).json({
+            status: true,
+            message: "Password updated successfully"
+        });
+    } catch (error) {
+        console.error("Error in changePassword:", error);
         res.status(500).json({
             status: false,
-            message: "Error while updating admin",
+            message: "Error while changing password",
             error: error.message
         });
     }
 };
+
+exports.deleteAdmin = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!id) {
+            return res.status(400).json({ status: false, message: "Admin ID is required" });
+        }
+
+        const existingAdmin = await query("SELECT * FROM public.admin WHERE id = $1", [id]);
+        if (existingAdmin.length === 0) {
+            return res.status(404).json({ status: false, message: "Admin not found" });
+        }
+
+        // Prevent deletion of primary admin user
+        if (existingAdmin[0].username === 'admin') {
+            return res.status(400).json({
+                status: false,
+                message: "Primary admin user cannot be deleted."
+            });
+        }
+
+        // Unlink admin from source_location if assigned
+        await query("UPDATE public.source_location SET admin_id = NULL WHERE admin_id = $1", [id]);
+
+        await query("DELETE FROM public.admin WHERE id = $1", [id]);
+
+        res.status(200).json({
+            status: true,
+            message: "Moderator deleted successfully"
+        });
+    } catch (error) {
+        console.error("Error in deleteAdmin:", error);
+        res.status(500).json({
+            status: false,
+            message: "Error while deleting moderator",
+            error: error.message
+        });
+    }
+};
+
 
 
 

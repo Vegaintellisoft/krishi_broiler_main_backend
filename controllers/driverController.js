@@ -96,9 +96,27 @@ exports.login = async (req, res) => {
             return res.status(400).json({ status: false, message: "Username, password and category are required" });
         }
 
-        const result = await query("SELECT * FROM driver WHERE username = $1 AND category = $2", [username, category]);
+        // Allow login by username, email, or mobile number (case-insensitive & trimmed)
+        let result = await query(
+            `SELECT * FROM driver 
+             WHERE (LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1)) OR mobile = $1) 
+               AND LOWER(TRIM(category)) = LOWER(TRIM($2))`,
+            [username, category]
+        );
 
         if (result.length === 0) {
+            // Check if user exists under a different category or with wrong username/email
+            const categoryCheck = await query(
+                `SELECT * FROM driver 
+                 WHERE LOWER(TRIM(username)) = LOWER(TRIM($1)) OR LOWER(TRIM(email)) = LOWER(TRIM($1)) OR mobile = $1`,
+                [username]
+            );
+            if (categoryCheck.length > 0) {
+                return res.status(401).json({ 
+                    status: false, 
+                    message: `Category mismatch: This account is registered under category '${categoryCheck[0].category}'. Please select '${categoryCheck[0].category}' in category dropdown.` 
+                });
+            }
             return res.status(401).json({ status: false, message: "Invalid username, category, or password" });
         }
 
@@ -123,22 +141,21 @@ exports.login = async (req, res) => {
 
         // Fetch role from user_roles — also check that the role is active
         const roleResult = await query(
-            "SELECT permissions, status FROM public.user_roles WHERE role_name = $1 AND category = $2",
+            "SELECT permissions, status FROM public.user_roles WHERE LOWER(TRIM(role_name)) = LOWER(TRIM($1)) AND LOWER(TRIM(category)) = LOWER(TRIM($2))",
             [user.role, user.category]
         );
 
-        if (roleResult.length === 0) {
-            return res.status(403).json({ status: false, message: "Your assigned role no longer exists. Please contact admin." });
+        if (roleResult.length > 0) {
+            const roleData = roleResult[0];
+            const isRoleActive = roleData.status === true || roleData.status === "active";
+
+            if (!isRoleActive) {
+                return res.status(403).json({ status: false, message: "Your role has been deactivated. Please contact admin." });
+            }
+            user.permissions = roleData.permissions;
+        } else {
+            user.permissions = {};
         }
-
-        const roleData = roleResult[0];
-        const isRoleActive = roleData.status === true || roleData.status === "active";
-
-        if (!isRoleActive) {
-            return res.status(403).json({ status: false, message: "Your role has been deactivated. Please contact admin." });
-        }
-
-        user.permissions = roleData.permissions;
 
         // Log successful login
         await query(
@@ -151,6 +168,7 @@ exports.login = async (req, res) => {
             status: true,
             message: "Login successful",
             user,
+            permissions: user.permissions || {},
             token
         });
 
@@ -436,3 +454,41 @@ exports.deleteDriver = async (req, res) => {
         res.status(500).json({ status: false, message: "Error occurs while deleting the driver data", error: error.message });
     }
 };
+
+// ---------------------- CHANGE PASSWORD ----------------------
+exports.changePassword = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { currentPassword, newPassword } = req.body;
+
+        if (!id || !currentPassword || !newPassword) {
+            return res.status(400).json({ status: false, message: "User ID, current password and new password are required" });
+        }
+
+        if (newPassword.length < 6) {
+            return res.status(400).json({ status: false, message: "New password must be at least 6 characters" });
+        }
+
+        const result = await query("SELECT * FROM driver WHERE id = $1", [id]);
+        if (result.length === 0) {
+            return res.status(404).json({ status: false, message: "User not found" });
+        }
+
+        const user = result[0];
+
+        const isMatch = await bcrypt.compare(currentPassword, user.password);
+        if (!isMatch) {
+            return res.status(401).json({ status: false, message: "Current password is incorrect" });
+        }
+
+        const hashed = await bcrypt.hash(newPassword, 10);
+        await query("UPDATE driver SET password = $1, updated_at = NOW() WHERE id = $2", [hashed, id]);
+
+        res.status(200).json({ status: true, message: "Password changed successfully" });
+
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ status: false, message: "Error changing password", error: error.message });
+    }
+};
+
