@@ -1,7 +1,31 @@
 const path = require("path");
 const fs = require('fs');
 const os = require('os');
-const { runtime } = require("../utils/paths");
+const { runtime, asset } = require("../utils/paths");
+
+let cachedLogoDataUri = null;
+
+function getKrishiLogoDataUri() {
+    if (cachedLogoDataUri) return cachedLogoDataUri;
+    try {
+        const candidatePaths = [
+            path.join(__dirname, '..', 'assets', 'images', 'krishi-logo.png'),
+            path.join(__dirname, '..', '..', 'admin', 'public', 'krishi-logo.png'),
+            path.join(__dirname, '..', 'public', 'krishi-logo.png'),
+        ];
+
+        for (const p of candidatePaths) {
+            if (fs.existsSync(p)) {
+                const buf = fs.readFileSync(p);
+                cachedLogoDataUri = 'data:image/png;base64,' + buf.toString('base64');
+                return cachedLogoDataUri;
+            }
+        }
+    } catch (e) {
+        console.warn('Could not load local Krishi logo image:', e.message);
+    }
+    return cachedLogoDataUri || '';
+}
 
 function getChromiumPath() {
     const platform = os.platform();
@@ -20,15 +44,11 @@ function getChromiumPath() {
             if (fs.existsSync(p)) return p;
         }
         
-        // If checking paths fails on Linux, return undefined. 
-        // This lets Puppeteer try its own bundled version as a fallback.
-        // But usually, the first path above will work after your recent install.
         return '/usr/bin/google-chrome'; 
     }
 
     // 2. WINDOWS (Local Dev / PKG) Logic
     if (platform === 'win32') {
-        // Check for portable chromium next to the .exe (or project root in dev)
         const localChromium = runtime('chromium', 'chrome.exe');
         if (fs.existsSync(localChromium)) return localChromium;
 
@@ -48,7 +68,7 @@ function getChromiumPath() {
         }
     }
 
-    // 3. MAC OS Logic (Just in case)
+    // 3. MAC OS Logic
     if (platform === 'darwin') {
         return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
     }
@@ -56,4 +76,4 @@ function getChromiumPath() {
     throw new Error("Chromium/Chrome not found. Please install Google Chrome.");
 }
 
-module.exports = { getChromiumPath };
+module.exports = { getChromiumPath, getKrishiLogoDataUri };

@@ -20,7 +20,11 @@ const {
     getBroilerFarmActivityDetails
 } = require("../controllers/adminController");
 
-const { getMobileActivity, getAdminAuditLog } = require("../controllers/activityLogController");
+const {
+    getAllActivityLogs,
+    getMobileActivity,
+    getAdminAuditLog
+} = require("../controllers/activityLogController");
 
 // api/admin
 router.post("/register", register);
@@ -42,6 +46,7 @@ router.get("/broiler-dashboard-report", getBroilerDashboardReport);
 router.get("/broiler-farm-activity-details", getBroilerFarmActivityDetails);
 
 // --- Activity Monitor Routes ---
+router.get("/activity-logs/all", getAllActivityLogs);
 router.get("/activity-logs/mobile", getMobileActivity);
 router.get("/activity-logs/admin", getAdminAuditLog);
 

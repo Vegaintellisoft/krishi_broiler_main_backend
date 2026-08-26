@@ -10,10 +10,20 @@ const USERNAME = process.env.SARAL_USERNAME;
 const PASSWORD = process.env.SARAL_PASSWORD;
 const GSTIN = process.env.SARAL_GSTIN;
 
+const API_TIMEOUT = 12000; // 12s timeout to prevent hanging
+
+let cachedTokens = null;
+let tokenExpiry = 0;
+
 /**
- * COMMON AUTH HANDLER
+ * COMMON AUTH HANDLER WITH 4-HOUR TOKEN CACHING
  */
-async function getSaralTokens() {
+async function getSaralTokens(forceRefresh = false) {
+  const now = Date.now();
+  if (!forceRefresh && cachedTokens && now < tokenExpiry) {
+    return cachedTokens;
+  }
+
   try {
     // 1. Authenticate
     const authRes = await axios.get(
@@ -23,6 +33,7 @@ async function getSaralTokens() {
           ClientId: CLIENT_ID,
           ClientSecret: CLIENT_SECRET,
         },
+        timeout: API_TIMEOUT,
       }
     );
 
@@ -41,27 +52,27 @@ async function getSaralTokens() {
           Gstin: GSTIN,
           Server: 1,
         },
+        timeout: API_TIMEOUT,
       }
     );
 
     const { authToken, sek } = invoiceAuthRes.data.data;
 
-    return {
+    cachedTokens = {
       authenticationToken,
       subscriptionId,
       authToken,
       sek,
     };
+    // Cache for 4 hours
+    tokenExpiry = now + (4 * 60 * 60 * 1000);
+
+    return cachedTokens;
   } catch (error) {
-    console.error("🚨 Saral Authentication Failed");
-
-    if (error.response?.data) {
-      console.error(error.response.data);
-    } else {
-      console.error(error.message);
-    }
-
-    throw new Error("Saral authentication failed");
+    cachedTokens = null;
+    tokenExpiry = 0;
+    console.error("Saral Authentication Failed:", error.response?.data || error.message);
+    throw new Error("Saral authentication failed: " + (error.response?.data?.message || error.message));
   }
 }
 
@@ -70,34 +81,60 @@ async function getSaralTokens() {
  */
 async function fetchEWayBillNumber(invoicePayload) {
   try {
-    const { authenticationToken, subscriptionId, authToken, sek } =
-      await getSaralTokens();
+    let tokens = await getSaralTokens();
 
-    const ewayRes = await axios.post(
-      `${SARAL_BASE}/v1.03/ewayapi`,
-      invoicePayload,
-      {
-        headers: {
-          authenticationToken,
-          subscriptionId,
-          username: USERNAME,
-          Gstin: GSTIN,
-          AuthToken: authToken,
-          sek,
-          action: "GENEWAYBILL",
-          Server: 1,
-        },
+    let ewayRes;
+    try {
+      ewayRes = await axios.post(
+        `${SARAL_BASE}/v1.03/ewayapi`,
+        invoicePayload,
+        {
+          headers: {
+            authenticationToken: tokens.authenticationToken,
+            subscriptionId: tokens.subscriptionId,
+            username: USERNAME,
+            Gstin: GSTIN,
+            AuthToken: tokens.authToken,
+            sek: tokens.sek,
+            action: "GENEWAYBILL",
+            Server: 1,
+          },
+          timeout: API_TIMEOUT,
+        }
+      );
+    } catch (apiErr) {
+      // If 401 Unauthorized, token may have expired early — retry once with fresh tokens
+      if (apiErr.response?.status === 401) {
+        console.log("Saral token expired, refreshing and retrying...");
+        tokens = await getSaralTokens(true);
+        ewayRes = await axios.post(
+          `${SARAL_BASE}/v1.03/ewayapi`,
+          invoicePayload,
+          {
+            headers: {
+              authenticationToken: tokens.authenticationToken,
+              subscriptionId: tokens.subscriptionId,
+              username: USERNAME,
+              Gstin: GSTIN,
+              AuthToken: tokens.authToken,
+              sek: tokens.sek,
+              action: "GENEWAYBILL",
+              Server: 1,
+            },
+            timeout: API_TIMEOUT,
+          }
+        );
+      } else {
+        throw apiErr;
       }
-    );
+    }
 
     const data = ewayRes.data;
 
-    // Saral error codes
     if (data.errorCodes) {
       return { error: `E-Way Error Codes: ${data.errorCodes}` };
     }
 
-    // Missing e-way bill number
     if (!data.ewayBillNo) {
       const errorMessage =
         data.errorDetails?.map((e) => e.errorMessage).join(", ") ||
@@ -116,80 +153,9 @@ async function fetchEWayBillNumber(invoicePayload) {
       ewbValidTill: data.validUpto,
       distance,
     };
-    
-      {/* 
-        // 3. Generate IRN
-        const irnRes = await axios.post(`${SARAL_BASE}/eicore/v1.03/Invoice`, invoicePayload, {
-          headers: {
-            authenticationToken,
-            subscriptionId,
-            username,
-            Gstin: gstin,
-            AuthToken: authToken,
-            sek,
-            Server: 1
-          }
-        });
-
-        console.log("Irn res data : ", irnRes.data);
-      
-        // if (irnRes.data.status !== 1 || !irnRes.data.irn) {
-        //   const errorDetails = irnRes.data.errorDetails || [];
-        //   const errorMessage = errorDetails.map(e => e.errorMessage).join(', ') || 'Unknown error';
-        //   console.error("🚨 Error generating IRN:", errorMessage);
-        //   return { error: errorMessage };
-        // }
-
-        const { irn, ewbNo } = irnRes.data;
-      
-        // If E-waybill already generated with IRN
-        if (ewbNo) return { ewbNo: ewbNo, irn: irn };
-      
-        // 4. Generate E-way bill
-        ewayPayload.Irn = irn;
-        const ewayRes = await axios.post(`${SARAL_BASE}/eiewb/v1.03/ewaybill`, ewayPayload, {
-          headers: {
-            authenticationToken,
-            subscriptionId,
-            username,
-            Gstin: gstin,
-            AuthToken: authToken,
-            sek,
-            action: 'GENEWAYBILL',
-            Server: 1
-          }
-        });
-
-        console.log("E way bill data : ", ewayRes.data);
-
-        // Check for errors in E-waybill response
-        if (!ewayRes.data.ewbNo) {
-          const errorDetails = ewayRes.data.errorDetails || [];
-          const errorMessage = errorDetails.map(e => e.errorMessage).join(', ') || 'Unknown error';
-          console.error("🚨 Error generating E-way bill:", errorMessage);
-          return { error: errorMessage }; // Return error and stop further execution
-        }
-
-        return {
-          ewbNo: ewayRes.data.ewbNo,
-          ewbDate: ewayRes.data.ewbDt,
-          ewbValidTill: ewayRes.data.ewbValidTill,
-          distance: parseInt(ewayRes.data.remarks.match(/\d+/)?.[0] || 0, 10),
-          irn: irn
-        };
-
-    */}
-
   } catch (error) {
-    console.error("🚨 E-Way Bill Generation Failed");
-
-    if (error.response?.data) {
-      console.error(error.response.data);
-    } else {
-      console.error(error.message);
-    }
-
-    return { error: error.message };
+    console.error("E-Way Bill Generation Failed:", error.response?.data || error.message);
+    return { error: error.response?.data?.message || error.message };
   }
 }
 
@@ -197,41 +163,29 @@ async function fetchEWayBillNumber(invoicePayload) {
  * CANCEL E-WAY BILL
  */
 async function cancelEway(cancelPayload) {
-  // const cancelPayload = {
-  //   ewbNo: 131318499920,
-  //   cancelRsnCode: 2,
-  //   cancelRank: "Cancelled the order"
-  // }
   try {
-    const { authenticationToken, subscriptionId, authToken, sek } =
-      await getSaralTokens();
+    const tokens = await getSaralTokens();
 
     const cancelRes = await axios.post(
       `${SARAL_BASE}/v1.03/ewayapi`,
       cancelPayload,
       {
         headers: {
-          authenticationToken,
-          subscriptionId,
+          authenticationToken: tokens.authenticationToken,
+          subscriptionId: tokens.subscriptionId,
           username: USERNAME,
           Gstin: GSTIN,
-          AuthToken: authToken,
-          sek,
+          AuthToken: tokens.authToken,
+          sek: tokens.sek,
           action: "CANEWB",
         },
+        timeout: API_TIMEOUT,
       }
     );
 
     return cancelRes.data;
   } catch (error) {
-    console.error("🚨 E-Way Bill Cancellation Failed");
-
-    if (error.response?.data) {
-      console.error(error.response.data);
-    } else {
-      console.error(error.message);
-    }
-
+    console.error("E-Way Bill Cancellation Failed:", error.response?.data || error.message);
     return { error: error.message };
   }
 }

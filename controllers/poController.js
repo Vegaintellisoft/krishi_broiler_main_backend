@@ -1,5 +1,32 @@
 const { query } = require("../config/db");
 
+function parseDateForDb(val) {
+    if (!val) return null;
+    const str = String(val).trim();
+    if (!str) return null;
+    // If format is DD/MM/YYYY or DD-MM-YYYY
+    const ddmmyyyy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+    if (ddmmyyyy) {
+        const day = ddmmyyyy[1].padStart(2, '0');
+        const month = ddmmyyyy[2].padStart(2, '0');
+        const year = ddmmyyyy[3];
+        return `${year}-${month}-${day}`;
+    }
+    // If format is YYYY-MM-DD or ISO
+    const yyyymmdd = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (yyyymmdd) {
+        const year = yyyymmdd[1];
+        const month = yyyymmdd[2].padStart(2, '0');
+        const day = yyyymmdd[3].padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+    }
+    return null;
+}
+
 exports.addPO = async (req, res) => {
     const { po_no, supplier__id, bill_no,
         rr_no, materials, user_id, status, po_date, rr_date, supplier_invoice_date } = req.body;
@@ -19,6 +46,13 @@ exports.addPO = async (req, res) => {
     }
 
     try {
+        const cleanPoDate = parseDateForDb(po_date);
+        const cleanRrDate = parseDateForDb(rr_date);
+        const cleanInvoiceDate = parseDateForDb(supplier_invoice_date);
+        const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : 1;
+        const cleanUserId = user_id ? parseInt(user_id, 10) : null;
+        const cleanSupplierId = parseInt(supplier__id, 10);
+
         const queryText = `
             INSERT INTO PO (po_no, supplier__id, bill_no, rr_no, 
             materials, user_id, status, po_date, rr_date, supplier_invoice_date, created_at, updated_at)
@@ -26,8 +60,18 @@ exports.addPO = async (req, res) => {
             RETURNING *;
         `;
 
-        const values = [po_no, supplier__id, bill_no, rr_no,
-            JSON.stringify(materials), user_id, status, po_date, rr_date, supplier_invoice_date];
+        const values = [
+            String(po_no).trim(),
+            cleanSupplierId,
+            bill_no ? String(bill_no).trim() : null,
+            rr_no ? String(rr_no).trim() : null,
+            JSON.stringify(materials),
+            cleanUserId,
+            cleanStatus,
+            cleanPoDate,
+            cleanRrDate,
+            cleanInvoiceDate
+        ];
 
         const result = await query(queryText, values);
 
@@ -47,7 +91,7 @@ exports.addPO = async (req, res) => {
         console.error(error);
         res.status(500).json({
             status: false,
-            message: "Error while adding Purchase Order",
+            message: error.message || "Error while adding Purchase Order",
             error: error.message,
         });
     }
@@ -56,8 +100,6 @@ exports.addPO = async (req, res) => {
 exports.updatePO = async (req, res) => {
     const { id } = req.params;
     const { po_no, supplier__id, bill_no, rr_no, materials, status, po_date, rr_date, supplier_invoice_date } = req.body;
-
-    // console.log(status)
 
     if (!po_no || !supplier__id || !materials) {
         return res.status(400).json({
@@ -83,6 +125,12 @@ exports.updatePO = async (req, res) => {
             });
         }
 
+        const cleanPoDate = parseDateForDb(po_date);
+        const cleanRrDate = parseDateForDb(rr_date);
+        const cleanInvoiceDate = parseDateForDb(supplier_invoice_date);
+        const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : 1;
+        const cleanSupplierId = parseInt(supplier__id, 10);
+
         const queryText = `
             UPDATE PO 
             SET po_no = $1, supplier__id = $2, bill_no = $3, 
@@ -93,7 +141,18 @@ exports.updatePO = async (req, res) => {
             RETURNING *;
         `;
 
-        const values = [po_no, supplier__id, bill_no, rr_no, JSON.stringify(materials), status, po_date, rr_date, supplier_invoice_date, id];
+        const values = [
+            String(po_no).trim(),
+            cleanSupplierId,
+            bill_no ? String(bill_no).trim() : null,
+            rr_no ? String(rr_no).trim() : null,
+            JSON.stringify(materials),
+            cleanStatus,
+            cleanPoDate,
+            cleanRrDate,
+            cleanInvoiceDate,
+            id
+        ];
 
         const result = await query(queryText, values);
 
@@ -113,155 +172,34 @@ exports.updatePO = async (req, res) => {
         console.error(error);
         res.status(500).json({
             status: false,
-            message: "Error while updating Purchase Order",
+            message: error.message || "Error while updating Purchase Order",
             error: error.message,
         });
     }
 };
 
-
-
-// exports.getAll = async (req, res) => {
-//     try {
-//         const { user_id } = req.params;
-
-//         let poQuery;
-//         let params = [];
-
-//         if (!user_id) {
-//             // Case 1: user_id is null → return all
-//             poQuery = "SELECT * FROM PO ORDER BY created_at DESC";
-//         } else {
-//             // Check user role from driver table
-//             const driverResult = await query("SELECT role FROM driver WHERE id = $1", [user_id]);
-
-//             if (driverResult.length === 0) {
-//                 return res.status(404).json({ status: false, message: "User not found" });
-//             }
-
-//             const userRole = driverResult[0].role;
-
-//             if (userRole === 'admin') {
-//                 // Case 2: Admin → return all
-//                 poQuery = "SELECT * FROM PO ORDER BY created_at DESC";
-//             } else {
-//                 // Case 3: Normal user → return only their POs
-//                 poQuery = "SELECT * FROM PO WHERE user_id = $1 ORDER BY created_at DESC";
-//                 params = [user_id];
-//             }
-//         }
-
-//         const result = await query(poQuery, params);
-
-//         if (result.length === 0) {
-//             return res.status(404).json({ status: false, message: "The po list is empty" });
-//         }
-
-//         const fullData = await Promise.all(result.map(async (r) => {
-//             const supplierResult = await query("SELECT * FROM supplier WHERE id = $1", [r.supplier__id]);
-//             const supplierName = supplierResult?.length > 0 ? supplierResult[0]?.name : 'Unknown Supplier';
-
-//             const materials = r.materials || [];
-//             const materialCount = materials.length;
-
-//             return {
-//                 ...r,
-//                 supplier_name: supplierName,
-//                 material_count: materialCount
-//             };
-//         }));
-
-//         res.status(200).json({ status: true, data: fullData });
-
-//     } catch (error) {
-//         console.error(error);
-//         res.status(500).json({ status: false, message: "Error while fetching po", error: error.message });
-//     }
-// };
-
-
-
 exports.getAll = async (req, res) => {
     try {
-        const { user_id } = req.params;
-
-        // If no user_id → send everything
-        if (!user_id) {
-            const result = await query(`
-                SELECT p.*, s.name AS supplier_name,
-                TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
-                    TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
-                    TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
-                       jsonb_array_length(p.materials) AS material_count
-                FROM PO p
-                LEFT JOIN supplier s ON p.supplier__id = s.id
-                ORDER BY p.created_at DESC
-            `);
-
-            if (!result.length) {
-                return res.status(404).json({ status: false, message: "The po list is empty" });
-            }
-
-            return res.status(200).json({ status: true, data: result });
-        }
-
-        // Check user role
-        const driverResult = await query(
-            "SELECT role FROM driver WHERE id = $1",
-            [user_id]
-        );
-
-        if (!driverResult.length) {
-            return res.status(404).json({ status: false, message: "User not found" });
-        }
-
-        const role = driverResult[0].role;
-
-        // Admin → return all PO
-        if (role === "admin") {
-            const result = await query(`
-                SELECT p.*, s.name AS supplier_name,
-                TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
-                    TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
-                    TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
-                       jsonb_array_length(p.materials) AS material_count
-                FROM PO p
-                LEFT JOIN supplier s ON p.supplier__id = s.id
-                ORDER BY p.created_at DESC
-            `);
-
-            return res.json({ status: true, data: result });
-        }
-
-        // Non-admin → return their PO + admin-created PO
-        const adminIds = await query(
-            "SELECT id FROM driver WHERE role = 'admin'"
-        );
-
-        const adminIdList = adminIds.map(a => a.id);  // array of admin IDs
-
-        const result = await query(
-            `
+        const result = await query(`
             SELECT p.*, s.name AS supplier_name,
-            TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
-                    TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
-                    TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
-                   jsonb_array_length(p.materials) AS material_count
+                TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
+                TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
+                TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
+                jsonb_array_length(p.materials) AS material_count
             FROM PO p
             LEFT JOIN supplier s ON p.supplier__id = s.id
-            WHERE p.user_id = ANY($1::int[]) 
-               OR p.user_id = $2
-            ORDER BY p.created_at DESC
-            `,
-            [adminIdList, user_id]
-        );
+            ORDER BY 
+                CASE 
+                    WHEN p.status = 3 THEN 1  -- Active
+                    WHEN p.status = 1 THEN 2  -- Pending
+                    WHEN p.status = 2 THEN 3  -- In-Transit
+                    WHEN p.status = 4 THEN 4  -- Close
+                    ELSE 5
+                END ASC,
+                p.created_at DESC
+        `);
 
-        if (!result.length) {
-            return res.status(404).json({ status: false, message: "The po list is empty" });
-        }
-
-        return res.json({ status: true, data: result });
-
+        return res.json({ status: true, data: result || [] });
     } catch (error) {
         console.error(error);
         res.status(500).json({
@@ -271,7 +209,6 @@ exports.getAll = async (req, res) => {
         });
     }
 };
-
 
 exports.deletePO = async (req, res) => {
     try {
@@ -283,7 +220,6 @@ exports.deletePO = async (req, res) => {
 
         const result = await query("DELETE FROM PO WHERE id = $1 RETURNING id", [id]);
 
-
         if (result.length === 0) {
             return res.status(404).json({ status: false, message: "PO not found" });
         }
@@ -293,4 +229,4 @@ exports.deletePO = async (req, res) => {
         console.log(error);
         res.status(500).json({ status: false, message: "Error while deleting po", error: error });
     }
-}
+};

@@ -1,6 +1,10 @@
 const jwt = require("jsonwebtoken");
 const os = require("os");
 const { query } = require("../config/db");
+const {
+    formatActivePermissions,
+    formatRoleChangeSummary
+} = require("../utils/permissionAuditHelper");
 
 const JWT_SECRET = process.env.JWT_SECRET || "default_jwt_secret";
 
@@ -15,7 +19,6 @@ function isDuplicate(key) {
         return true;
     }
     recentLogCache.set(key, now);
-    // Cleanup old keys periodically
     if (recentLogCache.size > 1000) {
         for (const [k, time] of recentLogCache.entries()) {
             if (now - time > DEDUP_WINDOW_MS * 2) {
@@ -62,7 +65,7 @@ function shouldSkipAudit(method, cleanUrl) {
     if (cleanUrl.includes("/db/add-unique-constrains")) return true;
 
     // 3. DC View/Preview PDF (POST used for rendering PDF view without any DB mutations)
-    if (cleanUrl.includes("/dc/getchallanbyview") || cleanUrl.endsWith("/getchallanbyview")) return true;
+    if (cleanUrl.includes("/dc/getchallanbyview") || cleanUrl.endsWith("/getchallanbyview") || cleanUrl.includes("/dc/getchallan")) return true;
 
     // 4. Activity log queries
     if (cleanUrl.includes("/activity-logs")) return true;
@@ -73,16 +76,20 @@ function shouldSkipAudit(method, cleanUrl) {
 /**
  * Resolve Category (Broiler, Wagon, Breeder)
  */
-function resolveCategory(req, decodedCategory = null) {
+function resolveCategory(req, body = {}, decodedCategory = null) {
     if (req.headers && req.headers["x-admin-category"]) {
         const cat = String(req.headers["x-admin-category"]).trim();
+        if (cat) return cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase();
+    }
+    if (req.headers && req.headers["x-mobile-category"]) {
+        const cat = String(req.headers["x-mobile-category"]).trim();
         if (cat) return cat.charAt(0).toUpperCase() + cat.slice(1).toLowerCase();
     }
     if (decodedCategory) {
         return String(decodedCategory).charAt(0).toUpperCase() + String(decodedCategory).slice(1).toLowerCase();
     }
-    if (req.body?.category) {
-        return String(req.body.category).charAt(0).toUpperCase() + String(req.body.category).slice(1).toLowerCase();
+    if (body?.category) {
+        return String(body.category).charAt(0).toUpperCase() + String(body.category).slice(1).toLowerCase();
     }
     const cleanUrl = (req.originalUrl || "").toLowerCase();
     if (
@@ -119,7 +126,7 @@ function resolveModule(url = "") {
     if (clean.includes("/driver/")) return "Mobile Users";
     if (clean.includes("/roles")) return "Roles & Permissions";
 
-    // Broiler routes (Order specific sub-modules first)
+    // Broiler routes
     if (clean.includes("/farm-activity")) return "Farm Activity";
     if (clean.includes("/shed-readiness")) return "Shed Readiness";
     if (clean.includes("/issue-medicine")) return "Issue Medicine";
@@ -127,7 +134,7 @@ function resolveModule(url = "") {
     if (clean.includes("/feedapproval") || clean.includes("/feed-approval")) return "Feed Approval";
     if (clean.includes("/feed-transfer")) return "Feed Transfer";
     if (clean.includes("/feed-return")) return "Feed Return";
-    if (clean.includes("/bill-of-supply")) return "Bill of Supply";
+    if (clean.includes("/bill-of-supply") || clean.includes("/broiler-supply")) return "Bill of Supply";
     if (clean.includes("/farmer-location")) return "Farmer Location Master";
     if (clean.includes("/farmer-line")) return "Farmer Line Master";
     if (clean.includes("/line-farm")) return "Line Farm Master";
@@ -176,6 +183,9 @@ function resolveAction(method = "", url = "") {
     if (clean.includes("/send-to-sap") || clean.includes("/sync-sap")) {
         return "SYNC";
     }
+    if (clean.includes("/submit")) {
+        return "SUBMIT";
+    }
     switch (method.toUpperCase()) {
         case "POST":   return "CREATE";
         case "PUT":    return "UPDATE";
@@ -197,31 +207,23 @@ function resolveSource(req, role = "") {
         return "admin";
     }
 
-    // 2. Admin URL routes (pure admin-only endpoints)
-    if (
-        url.startsWith("/api/admin") ||
-        url.startsWith("/api/roles") ||
-        url.startsWith("/api/po") ||
-        url.startsWith("/api/material") ||
-        url.startsWith("/api/supplier") ||
-        url.startsWith("/api/shipping") ||
-        url.startsWith("/api/source") ||
-        url.startsWith("/api/unit") ||
-        url.startsWith("/api/reports")
-    ) {
+    // 2. Explicit mobile headers sent by Mobile App Axios interceptor
+    if (req.headers && (req.headers["x-mobile-user"] || req.headers["x-mobile-role"] || req.headers["x-mobile-fullname"] || req.headers["x-user-id"])) {
+        return "mobile";
+    }
+
+    // 3. Admin URL routes — pure admin-only endpoints
+    if (url.includes("/api/admin/") || url.includes("/api/roles/")) {
+        return "admin";
+    }
+    if (url.includes("/api/dc/") || url.includes("/api/po/") || url.includes("/api/material/") || url.includes("/api/supplier/") || url.includes("/api/shipping/") || url.includes("/api/source/") || url.includes("/api/unit/")) {
+        if (roleLower.includes("driver") || roleLower.includes("supervisor")) {
+            return "mobile";
+        }
         return "admin";
     }
 
-    // DC routes: add/update/cancel/getChallan are admin-only
-    // BUT arrived toggle is called from Wagon mobile app (no x-admin headers)
-    if (url.startsWith("/api/dc")) {
-        if (url.includes("/arrived/")) {
-            return "mobile"; // Wagon mobile marks DC as arrived
-        }
-        return "admin"; // All other DC operations are admin panel
-    }
-
-    // 3. Mobile app routes — ALL broiler/breeder/driver routes WITHOUT admin headers are mobile
+    // 4. Mobile app routes — ALL broiler/breeder/driver routes without admin headers are mobile
     if (
         url.includes("/api/broiler/") ||
         url.includes("/api/breeder/") ||
@@ -230,7 +232,7 @@ function resolveSource(req, role = "") {
         return "mobile";
     }
 
-    // 4. Role based fallback
+    // 5. Role based fallback
     if (roleLower.includes("supervisor") || roleLower.includes("driver")) {
         return "mobile";
     }
@@ -241,12 +243,10 @@ function resolveSource(req, role = "") {
 /**
  * Generate specific description of WHAT changed
  */
-function generateChangeSummary(req, action, moduleName) {
-    const body = req.body || {};
+function generateChangeSummary(req, action, moduleName, body = {}) {
     const url = req.originalUrl || "";
     const cleanUrl = url.toLowerCase();
 
-    // Extract ID from URL
     const urlParts = url.split("?")[0].split("/").filter(Boolean);
     const targetId = urlParts[urlParts.length - 1] || "";
 
@@ -311,22 +311,24 @@ function generateChangeSummary(req, action, moduleName) {
 
     // 4. ROLES & PERMISSIONS
     if (moduleName === "Roles & Permissions") {
-        const roleName = body.role_name || body.name || `Role #${targetId}`;
-        const category = body.category || "";
+        const roleName = body.role_name || body.name || (req._oldRoleData?.role_name) || `Role #${targetId}`;
+        const category = body.category || req._oldRoleData?.category || "";
         if (cleanUrl.includes("/reassignanddelete")) {
-            return `Reassigned & Deleted role (ID: #${targetId})`;
+            const oldName = req._oldRoleData?.role_name ? `"${req._oldRoleData.role_name}"` : `role #${targetId}`;
+            const catStr = req._oldRoleData?.category ? ` (${req._oldRoleData.category})` : '';
+            return `Reassigned users from ${oldName}${catStr} to "${body.new_role_name || 'new role'}" and deleted role (ID: #${targetId})`;
         }
         if (action === "CREATE") {
-            return `Created new role "${roleName}"${category ? ` for ${category}` : ""}`;
+            const activePerms = formatActivePermissions(body.permissions);
+            return `Created new role "${roleName}"${category ? ` (${category})` : ""}${activePerms ? ` | Configured: ${activePerms}` : ""}`;
         }
         if (action === "UPDATE") {
-            const perms = body.permissions
-                ? ` | Permissions updated (${Array.isArray(body.permissions) ? body.permissions.length : 1} keys)`
-                : "";
-            return `Updated role "${roleName}"${category ? ` (${category})` : ""}${perms}`;
+            return `__ROLE_UPDATE__#${targetId}`;
         }
         if (action === "DELETE") {
-            return `Deleted role (ID: #${targetId})`;
+            const oldName = req._oldRoleData?.role_name ? `"${req._oldRoleData.role_name}"` : `role #${targetId}`;
+            const catStr = req._oldRoleData?.category ? ` (${req._oldRoleData.category})` : '';
+            return `Deleted role ${oldName}${catStr} (ID: #${targetId})`;
         }
     }
 
@@ -398,14 +400,11 @@ function generateChangeSummary(req, action, moduleName) {
     if (moduleName === "Material Master") {
         const matName = body.name || body.material_name || `Material #${targetId}`;
         if (action === "CREATE") {
-            const parts = [`Name: ${matName}`];
-            if (body.material_code) parts.push(`Code: ${body.material_code}`);
-            if (body.hsn_code) parts.push(`HSN: ${body.hsn_code}`);
-            return `Created Material — ${parts.join(" | ")}`;
+            return `Created Material "${matName}"${body.hsn_code ? ` (HSN: ${body.hsn_code})` : ""}`;
         }
         if (action === "UPDATE") {
             const parts = [`Name: ${matName}`];
-            if (body.material_code) parts.push(`Code: ${body.material_code}`);
+            if (body.hsn_code) parts.push(`HSN: ${body.hsn_code}`);
             if (body.status !== undefined) parts.push(`Status: ${body.status ? "Active" : "Inactive"}`);
             return `Updated Material "${matName}" (ID: #${targetId}) — ${parts.join(" | ")}`;
         }
@@ -416,17 +415,15 @@ function generateChangeSummary(req, action, moduleName) {
 
     // 8. SUPPLIER MASTER
     if (moduleName === "Supplier Master") {
-        const supplierName = body.name || body.supplier_name || `Supplier #${targetId}`;
+        const supName = body.name || body.supplier_name || `Supplier #${targetId}`;
         if (action === "CREATE") {
-            const parts = [`Name: ${supplierName}`];
-            if (body.gst_no || body.gstin) parts.push(`GST: ${body.gst_no || body.gstin}`);
-            if (body.state) parts.push(`State: ${body.state}`);
-            return `Created Supplier — ${parts.join(" | ")}`;
+            return `Created Supplier "${supName}"${body.city ? ` (${body.city})` : ""}`;
         }
         if (action === "UPDATE") {
-            const parts = [`Name: ${supplierName}`];
+            const parts = [`Name: ${supName}`];
+            if (body.city) parts.push(`City: ${body.city}`);
             if (body.status !== undefined) parts.push(`Status: ${body.status ? "Active" : "Inactive"}`);
-            return `Updated Supplier "${supplierName}" (ID: #${targetId}) — ${parts.join(" | ")}`;
+            return `Updated Supplier "${supName}" (ID: #${targetId}) — ${parts.join(" | ")}`;
         }
         if (action === "DELETE") {
             return `Deleted Supplier (ID: #${targetId})`;
@@ -435,29 +432,25 @@ function generateChangeSummary(req, action, moduleName) {
 
     // 9. SHIPPING MASTER
     if (moduleName === "Shipping Master") {
-        const shipName = body.sap_name || body.name || body.address || `Shipping #${targetId}`;
+        const shipName = body.name || body.shipping_name || `Shipping #${targetId}`;
         if (action === "CREATE") {
-            const parts = [`Name: ${shipName}`];
-            if (body.sap_code) parts.push(`SAP Code: ${body.sap_code}`);
-            return `Created Shipping Address — ${parts.join(" | ")}`;
+            return `Created Shipping Point "${shipName}"`;
         }
         if (action === "UPDATE") {
             const parts = [`Name: ${shipName}`];
             if (body.status !== undefined) parts.push(`Status: ${body.status ? "Active" : "Inactive"}`);
-            return `Updated Shipping Address "${shipName}" (ID: #${targetId}) — ${parts.join(" | ")}`;
+            return `Updated Shipping Point "${shipName}" (ID: #${targetId}) — ${parts.join(" | ")}`;
         }
         if (action === "DELETE") {
-            return `Deleted Shipping Address (ID: #${targetId})`;
+            return `Deleted Shipping Point (ID: #${targetId})`;
         }
     }
 
     // 10. SOURCE LOCATION
     if (moduleName === "Source Location") {
-        const sourceName = body.name || body.location_name || `Location #${targetId}`;
+        const sourceName = body.name || body.source_name || `Source #${targetId}`;
         if (action === "CREATE") {
-            const parts = [`Name: ${sourceName}`];
-            if (body.code) parts.push(`Code: ${body.code}`);
-            return `Created Source Location — ${parts.join(" | ")}`;
+            return `Created Source Location "${sourceName}"`;
         }
         if (action === "UPDATE") {
             const parts = [`Name: ${sourceName}`];
@@ -498,25 +491,26 @@ function generateChangeSummary(req, action, moduleName) {
         if (action === "DELETE") {
             return `Deleted Farm Activity entry #${targetId}`;
         }
-        if (action === "SUBMIT") {
-            // /submit endpoint: finalizes the day's entries
+        if (action === "SUBMIT" || cleanUrl.includes("/submit")) {
             const parts = [];
+            if (body.plant || body.plant_name) parts.push(`Plant: ${body.plant || body.plant_name}`);
             if (body.date) parts.push(`Date: ${body.date}`);
-            if (body.plant) parts.push(`Plant: ${body.plant}`);
+            if (body.total_farms) parts.push(`Total Farms: ${body.total_farms}`);
             if (body.user_id) parts.push(`User: ${body.user_id}`);
-            return `Submitted Farm Activity Report — ${parts.join(" | ") || "Day finalized"}`;
+            return `Finalized Daily Farm Activity — ${parts.join(" | ") || "Day finalized"}`;
         }
         const parts = [];
         if (body.farmer || body.farmer_name) parts.push(`Farmer: ${body.farmer || body.farmer_name}`);
         if (body.plant || body.plant_name) parts.push(`Plant: ${body.plant || body.plant_name}`);
         if (body.date) parts.push(`Date: ${body.date}`);
-        if (body.mortality !== undefined) parts.push(`Mortality: ${body.mortality}`);
-        if (body.body_weight !== undefined) parts.push(`Body Weight: ${body.body_weight}`);
+        if (body.mortality !== undefined && body.mortality !== "") parts.push(`Mortality: ${body.mortality}`);
+        if (body.body_weight !== undefined && body.body_weight !== "") parts.push(`Body Weight: ${body.body_weight} kg`);
         if (body.batch) parts.push(`Batch: ${body.batch}`);
+        if (body.stock) parts.push(`Stock: ${body.stock}`);
         if (action === "UPDATE") {
             return `Updated Farm Activity #${targetId} — ${parts.join(" | ") || "Details updated"}`;
         }
-        return `Submitted Farm Activity — ${parts.join(" | ") || "New entry created"}`;
+        return `Saved Farm Activity Entry — ${parts.join(" | ") || "Entry recorded"}`;
     }
 
     // 14. SHED READINESS (Broiler)
@@ -535,10 +529,11 @@ function generateChangeSummary(req, action, moduleName) {
         if (action === "DELETE") return `Deleted Issued Medicine entry #${targetId}`;
         const parts = [];
         if (body.farmer || body.farmer_name) parts.push(`Farmer: ${body.farmer || body.farmer_name}`);
-        if (body.medicine_name || body.item_name) parts.push(`Medicine: ${body.medicine_name || body.item_name}`);
+        if (body.plant || body.plant_name) parts.push(`Plant: ${body.plant || body.plant_name}`);
+        if (body.medicine_name || body.item_name || body.material) parts.push(`Medicine: ${body.medicine_name || body.item_name || body.material}`);
         if (body.quantity || body.qty) parts.push(`Qty: ${body.quantity || body.qty}`);
         if (action === "UPDATE") return `Updated Issued Medicine #${targetId} — ${parts.join(" | ") || "Details updated"}`;
-        return `Created Issued Medicine entry — ${parts.join(" | ") || "New entry"}`;
+        return `Issued Medicine — ${parts.join(" | ") || "New entry"}`;
     }
 
     // 16. FEED REQUEST (Broiler)
@@ -548,6 +543,7 @@ function generateChangeSummary(req, action, moduleName) {
         if (body.farmer || body.farmer_name) parts.push(`Farmer: ${body.farmer || body.farmer_name}`);
         if (body.plant || body.plant_id) parts.push(`Plant: ${body.plant || body.plant_id}`);
         if (body.quantity || body.requested_qty) parts.push(`Qty: ${body.quantity || body.requested_qty}`);
+        if (body.feed_type || body.feed_name || body.material) parts.push(`Feed: ${body.feed_type || body.feed_name || body.material}`);
         if (action === "UPDATE") return `Updated Feed Request #${targetId} — ${parts.join(" | ") || "Request updated"}`;
         return `Created Feed Request — ${parts.join(" | ") || "New feed request"}`;
     }
@@ -575,6 +571,7 @@ function generateChangeSummary(req, action, moduleName) {
         if (body.from_plant || body.from_location) parts.push(`From: ${body.from_plant || body.from_location}`);
         if (body.to_plant || body.to_location) parts.push(`To: ${body.to_plant || body.to_location}`);
         if (body.quantity || body.transfer_qty) parts.push(`Qty: ${body.quantity || body.transfer_qty}`);
+        if (body.feed_type || body.material) parts.push(`Feed: ${body.feed_type || body.material}`);
         if (action === "UPDATE") return `Updated Feed Transfer #${targetId} — ${parts.join(" | ") || "Transfer updated"}`;
         return `Created Feed Transfer — ${parts.join(" | ") || "New transfer"}`;
     }
@@ -586,7 +583,7 @@ function generateChangeSummary(req, action, moduleName) {
         if (body.farmer || body.farmer_name) parts.push(`Farmer: ${body.farmer || body.farmer_name}`);
         if (body.plant || body.plant_id) parts.push(`Plant: ${body.plant || body.plant_id}`);
         if (body.quantity || body.return_qty) parts.push(`Qty: ${body.quantity || body.return_qty}`);
-        if (body.feed_type || body.feed_name) parts.push(`Feed: ${body.feed_type || body.feed_name}`);
+        if (body.feed_type || body.feed_name || body.material) parts.push(`Feed: ${body.feed_type || body.feed_name || body.material}`);
         if (body.reason) parts.push(`Reason: ${body.reason}`);
         if (action === "UPDATE") return `Updated Feed Return #${targetId} — ${parts.join(" | ") || "Return updated"}`;
         return `Returned Feed — ${parts.join(" | ") || "New return entry"}`;
@@ -595,22 +592,28 @@ function generateChangeSummary(req, action, moduleName) {
     // 20. BILL OF SUPPLY (Broiler Mobile)
     if (moduleName === "Bill of Supply") {
         if (action === "DELETE") return `Deleted Bill of Supply #${targetId}`;
-        if (cleanUrl.includes("/draft")) {
+        if (cleanUrl.includes("/save-draft") || cleanUrl.includes("/draft")) {
             if (action === "DELETE") return `Deleted Bill of Supply Draft #${targetId}`;
-            if (cleanUrl.includes("/complete-draft")) return `Completed Bill of Supply Draft #${targetId}`;
-            return `Saved Bill of Supply Draft${body.doc_no ? ` #${body.doc_no}` : ""}`;
+            const dParts = [];
+            if (body.doc_no || body.dc_no) dParts.push(`Doc/DC No: ${body.doc_no || body.dc_no}`);
+            if (body.farmer || body.farmer_name) dParts.push(`Farmer: ${body.farmer || body.farmer_name}`);
+            if (body.plant) dParts.push(`Plant: ${body.plant}`);
+            return `Saved Bill of Supply Draft${dParts.length ? " — " + dParts.join(" | ") : ""}`;
         }
-        if (action === "SUBMIT") {
-            const parts = [];
-            if (body.doc_no) parts.push(`Doc No: ${body.doc_no}`);
-            if (body.farmer_name || body.farmer) parts.push(`Farmer: ${body.farmer_name || body.farmer}`);
-            if (body.plant || body.plant_id) parts.push(`Plant: ${body.plant || body.plant_id}`);
-            return `Submitted Bill of Supply — ${parts.join(" | ") || "Final submission"}`;
+        if (cleanUrl.includes("/complete-draft")) {
+            const cParts = [];
+            if (body.doc_no || body.dc_no) cParts.push(`Doc/DC No: ${body.doc_no || body.dc_no}`);
+            if (body.farmer || body.farmer_name) cParts.push(`Farmer: ${body.farmer || body.farmer_name}`);
+            if (body.customer || body.customer_name) cParts.push(`Customer: ${body.customer || body.customer_name}`);
+            if (body.bird_stock || body.total_birds) cParts.push(`Birds: ${body.bird_stock || body.total_birds}`);
+            return `Completed Bill of Supply Draft #${targetId} — ${cParts.join(" | ") || "Draft finalized"}`;
         }
         const parts = [];
-        if (body.doc_no) parts.push(`Doc No: ${body.doc_no}`);
-        if (body.farmer_name || body.farmer) parts.push(`Farmer: ${body.farmer_name || body.farmer}`);
+        if (body.doc_no || body.dc_no) parts.push(`Doc/DC No: ${body.doc_no || body.dc_no}`);
+        if (body.farmer || body.farmer_name) parts.push(`Farmer: ${body.farmer || body.farmer_name}`);
+        if (body.customer || body.customer_name) parts.push(`Customer: ${body.customer || body.customer_name}`);
         if (body.plant || body.plant_id) parts.push(`Plant: ${body.plant || body.plant_id}`);
+        if (body.bird_stock || body.total_birds) parts.push(`Birds: ${body.bird_stock || body.total_birds}`);
         if (action === "UPDATE") return `Updated Bill of Supply #${targetId} — ${parts.join(" | ") || "Details updated"}`;
         return `Created Bill of Supply — ${parts.join(" | ") || "New entry"}`;
     }
@@ -699,35 +702,25 @@ function generateChangeSummary(req, action, moduleName) {
 
     // 30. TENTATIVE RATE
     if (moduleName === "Tentative Rate") {
-        const rateParts = [];
-        if (body.plant_id || body.plant) rateParts.push(`Plant: ${body.plant_id || body.plant}`);
-        if (body.rate !== undefined) rateParts.push(`Rate: ${body.rate}`);
-        if (body.effective_date || body.date) rateParts.push(`Date: ${body.effective_date || body.date}`);
-        return `${action === "UPDATE" ? "Updated" : "Created"} Tentative Rate — ${rateParts.join(" | ") || `Plant #${body.plant_id || targetId}`}`;
+        const trParts = [];
+        if (body.rate !== undefined) trParts.push(`Rate: ${body.rate}`);
+        if (body.effective_date) trParts.push(`Date: ${body.effective_date}`);
+        if (body.plant) trParts.push(`Plant: ${body.plant}`);
+        return `Updated Tentative Rate${trParts.length ? ` — ${trParts.join(" | ")}` : ""}`;
     }
 
-    // 31. SAP INTEGRATION
-    if (moduleName === "SAP Integration") {
-        return `Synced SAP Master Data to Database`;
-    }
-
-    // 32. BREEDER MODULES
+    // 31. BIO SECURITY (Breeder)
     if (moduleName === "Bio Security") {
-        if (action === "DELETE") return `Deleted Bio Security record #${targetId}`;
         const bioParts = [];
-        if (body.farmer || body.farmer_name) bioParts.push(`Farmer: ${body.farmer || body.farmer_name}`);
-        if (body.farm_name || body.shed_no) bioParts.push(`Farm/Shed: ${body.farm_name || body.shed_no}`);
-        if (body.visit_date || body.date) bioParts.push(`Date: ${body.visit_date || body.date}`);
-        if (body.status) bioParts.push(`Status: ${body.status}`);
-        if (action === "UPDATE") return `Updated Bio Security record #${targetId} — ${bioParts.join(" | ") || "Details updated"}`;
-        return `Submitted Bio Security — ${bioParts.join(" | ") || "New record"}`;
+        if (body.unit_name || body.unit) bioParts.push(`Unit: ${body.unit_name || body.unit}`);
+        if (body.status !== undefined) bioParts.push(`Status: ${body.status}`);
+        return `Saved Bio Security Entry${bioParts.length ? ` — ${bioParts.join(" | ")}` : ""}`;
     }
+
+    // 32. FEED DETAILS (Breeder)
     if (moduleName === "Feed Details") {
-        if (action === "DELETE") return `Deleted Feed Details record #${targetId}`;
         const fdParts = [];
-        if (body.farmer || body.farmer_name) fdParts.push(`Farmer: ${body.farmer || body.farmer_name}`);
-        if (body.plant || body.plant_id) fdParts.push(`Plant: ${body.plant || body.plant_id}`);
-        if (body.feed_type || body.feed_name) fdParts.push(`Feed: ${body.feed_type || body.feed_name}`);
+        if (body.unit_name || body.unit) fdParts.push(`Unit: ${body.unit_name || body.unit}`);
         if (body.quantity || body.qty) fdParts.push(`Qty: ${body.quantity || body.qty}`);
         if (action === "UPDATE") return `Updated Feed Details record #${targetId} — ${fdParts.join(" | ") || "Details updated"}`;
         return `Submitted Feed Details — ${fdParts.join(" | ") || "New record"}`;
@@ -765,7 +758,7 @@ function sanitizeBody(body = {}) {
     return clean;
 }
 
-const auditLogger = (req, res, next) => {
+const auditLogger = async (req, res, next) => {
     // Prevent double-binding on the same request object
     if (req._auditLoggerAttached) return next();
     req._auditLoggerAttached = true;
@@ -773,14 +766,37 @@ const auditLogger = (req, res, next) => {
     const method = req.method ? req.method.toUpperCase() : "";
     const cleanUrl = (req.originalUrl || "").split("?")[0].toLowerCase();
 
-    // Skip GET, OPTIONS, auth logins, maintenance, and read/view queries like /api/dc/getChallanByView
+    // Skip GET, OPTIONS, auth logins, maintenance, and read/view queries
     if (shouldSkipAudit(method, cleanUrl)) {
         return next();
     }
 
-    // Capture request context early
+    // Pre-fetch old record before controller updates/deletes it
+    if (method === "PUT" || method === "PATCH" || method === "DELETE" || (method === "POST" && cleanUrl.includes("/reassignanddelete"))) {
+        const urlParts = cleanUrl.split("?")[0].split("/").filter(Boolean);
+        const targetId = urlParts[urlParts.length - 1];
+
+        if (targetId && /^\d+$/.test(targetId)) {
+            if (cleanUrl.includes("/roles/") || cleanUrl.includes("/role/")) {
+                try {
+                    const rows = await query("SELECT id, role_name, category, status, permissions FROM public.user_roles WHERE id = $1", [targetId]);
+                    if (rows && rows.length > 0) req._oldRoleData = rows[0];
+                } catch (_) {}
+            } else if (cleanUrl.includes("/driver/")) {
+                try {
+                    const rows = await query("SELECT id, fullname, username, role, category, status FROM public.driver WHERE id = $1", [targetId]);
+                    if (rows && rows.length > 0) req._oldDriverData = rows[0];
+                } catch (_) {}
+            } else if (cleanUrl.includes("/admin/")) {
+                try {
+                    const rows = await query("SELECT id, first_name, last_name, username, role, category, email, status FROM public.admin WHERE id = $1", [targetId]);
+                    if (rows && rows.length > 0) req._oldAdminData = rows[0];
+                } catch (_) {}
+            }
+        }
+    }
+
     const rawUrl = req.originalUrl || "";
-    const reqBody = req.body || {};
     const authHeader = req.headers["authorization"] || "";
     const adminUserHeader = req.headers["x-admin-user"];
     const adminRoleHeader = req.headers["x-admin-role"];
@@ -801,12 +817,15 @@ const auditLogger = (req, res, next) => {
                 return;
             }
 
+            // CRITICAL FIX: Extract body dynamically AFTER Multer / JSON body parsers have populated req.body
+            const effectiveBody = req.body || {};
+
             let username = "Unknown";
             let role = "Admin";
             let userId = null;
             let decodedCategory = null;
 
-            // Extract user from JWT
+            // Extract user from JWT if available
             try {
                 const token = authHeader.startsWith("Bearer ")
                     ? authHeader.slice(7)
@@ -833,88 +852,119 @@ const auditLogger = (req, res, next) => {
             if (mobileUserIdHeader && !userId) userId = String(mobileUserIdHeader);
             if (mobileCategoryHeader && !decodedCategory) decodedCategory = String(mobileCategoryHeader);
 
-            // Fallback user resolution
+            // Fallback user resolution from body or header
             if (username === "Unknown" || !username) {
-                if (reqBody?.user_id) username = String(reqBody.user_id);
-                else if (reqBody?.username) username = String(reqBody.username);
-                else if (reqBody?.created_by) username = String(reqBody.created_by);
+                if (effectiveBody?.user_id) username = String(effectiveBody.user_id);
+                else if (effectiveBody?.username) username = String(effectiveBody.username);
+                else if (effectiveBody?.created_by) username = String(effectiveBody.created_by);
+                else if (effectiveBody?.order_by) username = String(effectiveBody.order_by);
                 else if (usernameHeader) username = String(usernameHeader);
             }
 
-            // If username is numeric ID, try resolving username & role from driver table
+            // If username is numeric ID or userId not set, try resolving username, role & category from driver table
             if (username !== "Unknown" && /^\d+$/.test(String(username).trim())) {
                 try {
-                    const drv = await query("SELECT id, username, fullname, role FROM public.driver WHERE id = $1", [username]);
+                    const drv = await query("SELECT id, username, fullname, role, category FROM public.driver WHERE id = $1", [username]);
                     if (drv && drv.length > 0) {
                         userId = drv[0].id;
                         username = drv[0].username || username;
                         if (drv[0].role) role = drv[0].role;
+                        if (!decodedCategory && drv[0].category) decodedCategory = drv[0].category;
+                    }
+                } catch (_) {}
+            } else if (username !== "Unknown" && (!userId || role === "Admin" || !decodedCategory)) {
+                try {
+                    const drv = await query("SELECT id, username, fullname, role, category FROM public.driver WHERE LOWER(username) = LOWER($1) OR emp_id = $1", [username]);
+                    if (drv && drv.length > 0) {
+                        if (!userId) userId = drv[0].id;
+                        if (drv[0].role && role === "Admin") role = drv[0].role;
+                        if (!decodedCategory && drv[0].category) decodedCategory = drv[0].category;
+                    }
+                } catch (_) {}
+            }
+
+            // Also check admin table for category if still unresolved
+            if (!decodedCategory && username !== "Unknown") {
+                try {
+                    const adm = await query("SELECT id, username, role, category FROM public.admin WHERE LOWER(username) = LOWER($1) OR id::text = $2", [username, String(userId || '')]);
+                    if (adm && adm.length > 0 && adm[0].category) {
+                        decodedCategory = adm[0].category;
                     }
                 } catch (_) {}
             }
 
             // Deduplication Guard: Avoid duplicate entries for rapid repeated calls
-            const dedupKey = `${username}_${method}_${cleanUrl}_${JSON.stringify(reqBody)}`;
+            const dedupKey = `${username}_${method}_${cleanUrl}_${JSON.stringify(effectiveBody)}`;
             if (isDuplicate(dedupKey)) {
                 return;
             }
 
             const category = resolveCategory(
-                { headers: { "x-admin-category": adminCategoryHeader }, body: reqBody, originalUrl: rawUrl },
+                { headers: { "x-admin-category": adminCategoryHeader, "x-mobile-category": mobileCategoryHeader }, body: effectiveBody, originalUrl: rawUrl },
+                effectiveBody,
                 decodedCategory
             );
             const module_ = resolveModule(rawUrl);
             const action = resolveAction(method, rawUrl);
             const source = resolveSource(
-                { headers: { "x-admin-user": adminUserHeader, "x-admin-role": adminRoleHeader }, originalUrl: rawUrl },
+                { headers: { "x-admin-user": adminUserHeader, "x-admin-role": adminRoleHeader, "x-mobile-user": mobileUserHeader, "x-user-id": mobileUserIdHeader }, originalUrl: rawUrl },
                 role
             );
             if (source === "mobile" && role === "Admin") {
                 role = mobileRoleHeader || "Supervisor";
             }
+
             const changeSummary = generateChangeSummary(
-                { originalUrl: rawUrl, body: reqBody, params: req.params },
+                { originalUrl: rawUrl, body: effectiveBody, params: req.params, _oldRoleData: req._oldRoleData },
                 action,
-                module_
+                module_,
+                effectiveBody
             );
-            const sanitized = sanitizeBody(reqBody);
+            const sanitized = sanitizeBody(effectiveBody);
 
             let finalSummary = changeSummary;
+
+            // Roles & Permissions UPDATE diff
+            if (String(finalSummary).startsWith("__ROLE_UPDATE__")) {
+                const roleId = finalSummary.replace("__ROLE_UPDATE__#", "");
+                finalSummary = formatRoleChangeSummary({
+                    roleName: effectiveBody.role_name || req._oldRoleData?.role_name || `Role #${roleId}`,
+                    category: effectiveBody.category || req._oldRoleData?.category,
+                    oldRole: req._oldRoleData || {},
+                    newBody: effectiveBody
+                });
+            }
 
             // Mobile Users UPDATE diff
             if (String(finalSummary).startsWith("__MOBILE_UPDATE__")) {
                 const driverId = finalSummary.replace("__MOBILE_UPDATE__#", "");
                 try {
-                    const oldRows = await query(
-                        "SELECT fullname, username, role, status FROM driver WHERE id = $1",
-                        [driverId]
-                    );
-                    const old = (oldRows && oldRows.length > 0) ? oldRows[0] : {};
+                    const old = req._oldDriverData || {};
                     const parts = [];
 
-                    if (reqBody.fullname) {
-                        if (old.fullname && old.fullname !== reqBody.fullname)
-                            parts.push(`Name: ${old.fullname} → ${reqBody.fullname}`);
+                    if (effectiveBody.fullname) {
+                        if (old.fullname && old.fullname !== effectiveBody.fullname)
+                            parts.push(`Name: ${old.fullname} -> ${effectiveBody.fullname}`);
                         else
-                            parts.push(`Name: ${reqBody.fullname}`);
+                            parts.push(`Name: ${effectiveBody.fullname}`);
                     }
-                    if (reqBody.username) {
-                        if (old.username && old.username !== reqBody.username)
-                            parts.push(`Username: ${old.username} → ${reqBody.username}`);
+                    if (effectiveBody.username) {
+                        if (old.username && old.username !== effectiveBody.username)
+                            parts.push(`Username: ${old.username} -> ${effectiveBody.username}`);
                         else
-                            parts.push(`Username: ${reqBody.username}`);
+                            parts.push(`Username: ${effectiveBody.username}`);
                     }
-                    if (reqBody.role) {
-                        if (old.role && old.role !== reqBody.role)
-                            parts.push(`Role: ${old.role} → ${reqBody.role}`);
+                    if (effectiveBody.role) {
+                        if (old.role && old.role !== effectiveBody.role)
+                            parts.push(`Role: ${old.role} -> ${effectiveBody.role}`);
                         else
-                            parts.push(`Role: ${reqBody.role}`);
+                            parts.push(`Role: ${effectiveBody.role}`);
                     }
-                    if (reqBody.status !== undefined) {
-                        const newSt = reqBody.status ? "Active" : "Inactive";
-                        const oldSt = old.status ? "Active" : "Inactive";
+                    if (effectiveBody.status !== undefined) {
+                        const newSt = effectiveBody.status ? "Active" : "Inactive";
+                        const oldSt = (old.status === true || String(old.status).toLowerCase() === 'active') ? "Active" : "Inactive";
                         if (old.status !== undefined && oldSt !== newSt)
-                            parts.push(`Status: ${oldSt} → ${newSt}`);
+                            parts.push(`Status: ${oldSt} -> ${newSt}`);
                         else
                             parts.push(`Status: ${newSt}`);
                     }
@@ -928,7 +978,7 @@ const auditLogger = (req, res, next) => {
             await query(
                 `INSERT INTO public.admin_audit_logs
                     (user_id, username, role, category, action, module, ip_address, request_url, change_summary, details, source, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW() AT TIME ZONE 'Asia/Kolkata')`,
                 [
                     userId,
                     username,

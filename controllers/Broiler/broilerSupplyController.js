@@ -10,7 +10,7 @@ const { query } = require("../../config/db");
 const broilerDataEntry = require("./sap/broilerDataEntry.json");
 const { ToWords } = require("to-words");
 const { asset, runtime } = require("../../utils/paths");
-const { getChromiumPath } = require("../../services/helper");
+const { getChromiumPath, getKrishiLogoDataUri } = require("../../services/helper");
 // const { sendSMS } = require("../../services/smsService");
 const { sendBosSmS, sendBosCustomerSMS } = require("../../services/smsService");
 
@@ -372,6 +372,90 @@ const getMergedPlantDetails = (plantId, apiDetails) => {
     };
 };
 
+
+// Non-blocking asynchronous SMS dispatcher for Bill of Supply
+const dispatchBosSmsAsync = (data, contextName = 'create') => {
+    setImmediate(async () => {
+        try {
+            const { totalBirds, totalWeight } = (() => {
+                const t = computeTotals(data.load_details || []);
+                return { totalBirds: t.totalBirds || 0, totalWeight: +(t.net_weight || 0).toFixed(2) };
+            })();
+            
+            let farmerPhone = data.farmer_details?.telephone || null;
+            let farmerName = data.farmer_details?.farmer_name || null;
+            const streetParts = [data.farmer_details?.street, data.farmer_details?.street2, data.farmer_details?.street3].filter(Boolean).map(s => s.replace(/,\s*$/, '').trim()).filter(Boolean).join(', ');
+            const districtPin = [data.farmer_details?.district, data.farmer_details?.pincode].filter(Boolean).join(' - ');
+            let farmerAddress = [streetParts, districtPin].filter(Boolean).join(', ') || null;
+            const farmerCode = data.farmer || '-';
+
+            // Fallback to SAP API lookup if farmer phone is missing
+            if (!farmerPhone) {
+                try {
+                    const sapInfo = await fetchSapContactInfo(data.farmer, data.customer);
+                    if (sapInfo) {
+                        farmerPhone = sapInfo.farmerPhone;
+                        farmerName = farmerName || sapInfo.farmerName;
+                        farmerAddress = farmerAddress || sapInfo.farmerAddress;
+                    }
+                } catch (e) {
+                    console.warn(`BOS SMS (${contextName}) - SAP lookup failed:`, e.message);
+                }
+            }
+
+            const mobiles = [];
+            if (farmerPhone && String(farmerPhone).trim()) mobiles.push(String(farmerPhone).trim());
+
+            if (mobiles.length > 0) {
+                sendBosSmS({
+                    mobiles,
+                    birds: totalBirds,
+                    weight: totalWeight,
+                    vehicle_no: data.vehicle_no || '-',
+                    farmer_code: farmerCode,
+                    farmer_name: farmerName || '-',
+                    farmer_address: farmerAddress || '-',
+                    date: data.date
+                }).then(smsRes => {
+                    console.log(`BOS SMS (${contextName}) - Dispatch response:`, smsRes);
+                }).catch(e => console.warn(`BOS SMS (${contextName}) send error:`, e.message));
+            }
+
+            // Customer SMS
+            try {
+                const { customerPhone, customerBalance, customerName } = await fetchCustomerInfo(data.customer).catch(() => ({}));
+                const customerMobiles = [];
+                if (customerPhone && String(customerPhone).trim()) customerMobiles.push(String(customerPhone).trim());
+
+                if (!customerMobiles.length && data.customer_details?.telephone) {
+                    customerMobiles.push(String(data.customer_details.telephone).trim());
+                }
+
+                if (customerMobiles.length > 0) {
+                    const netKg = +(totalWeight).toFixed(2);
+                    const custName = customerName || data.customer_details?.customer_name || '';
+                    const customerLabel = `${data.customer || '-'} - ${custName}`;
+                    const cleanCustomerLabel = customerLabel.trim().replace(/ - $/, '');
+                    sendBosCustomerSMS({
+                        mobiles: customerMobiles,
+                        net_weight: netKg,
+                        farmer_label: cleanCustomerLabel,
+                        vehicle_no: data.vehicle_no || '-',
+                        rate: data.rate || '0',
+                        balance: customerBalance || 0
+                    }).then(smsRes => {
+                        console.log(`BOS SMS (${contextName}) - Customer dispatch response:`, smsRes);
+                    }).catch(e => console.warn(`BOS SMS (${contextName}) customer send error:`, e.message));
+                }
+            } catch (custSmsErr) {
+                console.warn(`BOS SMS (${contextName}) customer block error:`, custSmsErr.message);
+            }
+        } catch (smsErr) {
+            console.warn(`BOS SMS (${contextName}) block error:`, smsErr.message);
+        }
+    });
+};
+
 const generateBillOfSupplyPDF = async (data, doc_no) => {
     const { load_details = [], rate, driver_name, driver_mobile } = data;
 
@@ -445,13 +529,25 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
     const filePath = path.join(reportsDir, fileName);
     const publicUrl = `${process.env.SERVER_URL}/uploads/broiler/bill_of_supply/${fileName}`;
 
+    const logo_data_uri = getKrishiLogoDataUri();
+    templateData.logo_data_uri = logo_data_uri;
+
     const browser = await puppeteer.launch({
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu'
+        ],
         executablePath: getChromiumPath(),
     });
     const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'load' });
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
     await page.pdf({
         path: filePath,
@@ -517,113 +613,8 @@ exports.create = async (req, res) => {
         // Generate PDF immediately
         const publicUrl = await generateBillOfSupplyPDF(data, doc_no);
 
-        // --- Send lifted SMS to farmer only (fire-and-forget) ---
-        try {
-            const { totalBirds, totalWeight } = (() => {
-                const t = computeTotals(data.load_details || []);
-                return { totalBirds: t.totalBirds || 0, totalWeight: +(t.net_weight || 0).toFixed(2) };
-            })();
-            
-            let farmerPhone = data.farmer_details?.telephone || null;
-            let farmerName = data.farmer_details?.farmer_name || null;
-            const streetParts = [data.farmer_details?.street, data.farmer_details?.street2, data.farmer_details?.street3].filter(Boolean).map(s => s.replace(/,\s*$/, '').trim()).filter(Boolean).join(', ');
-            const districtPin = [data.farmer_details?.district, data.farmer_details?.pincode].filter(Boolean).join(' - ');
-            let farmerAddress = [streetParts, districtPin].filter(Boolean).join(', ') || null;
-            const farmerCode = data.farmer || '-';
-
-            console.log(`BOS SMS (create) - Initial Payload details:`, {
-                payloadFarmerPhone: farmerPhone,
-                farmerCode
-            });
-
-            // Fallback to SAP API lookup if farmer phone is missing
-            if (!farmerPhone) {
-                console.log(`BOS SMS (create) - Farmer phone missing in payload. Calling SAP lookup...`);
-                const sapInfo = await fetchSapContactInfo(data.farmer, data.customer);
-                farmerPhone = sapInfo.farmerPhone;
-                farmerName = sapInfo.farmerName;
-                farmerAddress = sapInfo.farmerAddress;
-            }
-
-
-            
-            // Send SMS only to farmer
-            const mobiles = [];
-            if (farmerPhone && String(farmerPhone).trim()) mobiles.push(String(farmerPhone).trim());
-
-            // 📋 Console log the full farmer SMS message
-            const dateStr = data.date ? require('date-fns').format(new Date(data.date), 'dd/MM/yyyy') : '-';
-            const farmerSmsMsg = `Lifted ${totalBirds} birds weighing ${totalWeight} kg via vehicle No. ${data.vehicle_no || '-'} from ${farmerCode} - ${farmerName || '-'} on ${dateStr}. KRISHI NUTRITION COMPANY PRIVATE LIMITED`;
-            console.log(`\n📋 ═══ FARMER SMS PREVIEW ═══`);
-            console.log(`📱 To: ${mobiles.join(', ') || 'NO NUMBER'}`);
-            console.log(`📝 Message: ${farmerSmsMsg}`);
-            console.log(`═══════════════════════════\n`);
-
-            console.log(`BOS SMS (create) - Final Recipients list (farmer only):`, mobiles);
-
-            if (mobiles.length > 0) {
-                console.log(`BOS SMS (create) - Dispatching SMS to farmer via sendBosSmS...`);
-                sendBosSmS({
-                    mobiles,
-                    birds: totalBirds,
-                    weight: totalWeight,
-                    vehicle_no: data.vehicle_no || '-',
-                    farmer_code: farmerCode,
-                    farmer_name: farmerName || '-',
-                    farmer_address: farmerAddress || '-',
-                    date: data.date
-                }).then(smsRes => {
-                    console.log('BOS SMS (create) - Dispatch response:', smsRes);
-                }).catch(e => console.warn('BOS SMS (create) send error:', e.message));
-            } else {
-                console.warn('BOS SMS (create) - No farmer mobile number found for SMS');
-            }
-
-            // --- Send SMS to customer ---
-            try {
-                const { customerPhone, customerBalance, customerName } = await fetchCustomerInfo(data.customer);
-                const customerMobiles = [];
-                if (customerPhone && String(customerPhone).trim()) customerMobiles.push(String(customerPhone).trim());
-
-                // Also check customer_details phone from payload as fallback
-                if (!customerMobiles.length && data.customer_details?.telephone) {
-                    customerMobiles.push(String(data.customer_details.telephone).trim());
-                }
-
-                const netKg = +(totalWeight).toFixed(2);
-                const custName = customerName || data.customer_details?.customer_name || '';
-                const customerLabel = `${data.customer || '-'} - ${custName}`;
-                const cleanCustomerLabel = customerLabel.trim().replace(/ - $/, '');
-
-                // 📋 Console log the full customer SMS message
-                const custSmsMsg = `${netKg} Kg sold to ${cleanCustomerLabel} Vehicle ${data.vehicle_no || '-'}. Tentative Rate Rs.${data.rate || '0'}/Kg. Existing Balance Rs.${customerBalance} KRISHI NUTRITION COMPANY PRIVATE LIMITED.`;
-                console.log(`\n📋 ═══ CUSTOMER SMS PREVIEW ═══`);
-                console.log(`📱 To: ${customerMobiles.join(', ') || 'NO NUMBER'}`);
-                console.log(`📝 Message: ${custSmsMsg}`);
-                console.log(`💰 Balance: Rs.${customerBalance}`);
-                console.log(`═══════════════════════════════\n`);
-
-                console.log(`BOS SMS (create) - Customer recipients:`, customerMobiles);
-
-                if (customerMobiles.length > 0) {
-                    sendBosCustomerSMS({
-                        mobiles: customerMobiles,
-                        net_weight: netKg,
-                        farmer_label: cleanCustomerLabel,
-                        vehicle_no: data.vehicle_no || '-',
-                        rate: data.rate || '0',
-                        balance: customerBalance
-                    }).then(smsRes => {
-                        console.log('BOS SMS (create) - Customer dispatch response:', smsRes);
-                    }).catch(e => console.warn('BOS SMS (create) customer send error:', e.message));
-                } else {
-                    console.warn('BOS SMS (create) - No customer mobile number found for SMS');
-                }
-            } catch (custSmsErr) { console.warn('BOS SMS (create) customer block error:', custSmsErr.message); }
-
-        } catch (smsErr) { console.warn('BOS SMS (create) block error:', smsErr.message); }
-
-
+        // --- Send SMS asynchronously (non-blocking) ---
+        dispatchBosSmsAsync(data, 'create');
 
         // Save PDF link in DB
         await query(
@@ -1689,91 +1680,8 @@ WHERE id = $3
 ]
 );
 
-// --- Send lifted SMS to farmer only after draft completion (fire-and-forget) ---
-try {
-    const { totalBirds, totalWeight } = (() => {
-        const t = computeTotals(data.load_details || []);
-        return { totalBirds: t.totalBirds || 0, totalWeight: +(t.net_weight || 0).toFixed(2) };
-    })();
-    
-    let farmerPhone = data.farmer_details?.telephone || null;
-    let farmerName = data.farmer_details?.farmer_name || null;
-    const streetParts2 = [data.farmer_details?.street, data.farmer_details?.street2, data.farmer_details?.street3].filter(Boolean).map(s => s.replace(/,\s*$/, '').trim()).filter(Boolean).join(', ');
-    const districtPin2 = [data.farmer_details?.district, data.farmer_details?.pincode].filter(Boolean).join(' - ');
-    let farmerAddress = [streetParts2, districtPin2].filter(Boolean).join(', ') || null;
-    const farmerCode = data.farmer || '-';
-
-    console.log(`BOS SMS (completeDraft) - Initial Payload details:`, {
-        payloadFarmerPhone: farmerPhone,
-        farmerCode
-    });
-
-    // Fallback to SAP API lookup if farmer phone is missing
-    if (!farmerPhone) {
-        console.log(`BOS SMS (completeDraft) - Farmer phone missing in payload. Calling SAP lookup...`);
-        const sapInfo = await fetchSapContactInfo(data.farmer, data.customer);
-        farmerPhone = sapInfo.farmerPhone;
-        farmerName = sapInfo.farmerName;
-        farmerAddress = sapInfo.farmerAddress;
-    }
-    
-    // Send SMS only to farmer
-    const mobiles = [];
-    if (farmerPhone && String(farmerPhone).trim()) mobiles.push(String(farmerPhone).trim());
-
-    console.log(`BOS SMS (completeDraft) - Final Recipients list (farmer only):`, mobiles);
-
-    if (mobiles.length > 0) {
-        console.log(`BOS SMS (completeDraft) - Dispatching SMS to farmer via sendBosSmS...`);
-        sendBosSmS({
-            mobiles,
-            birds: totalBirds,
-            weight: totalWeight,
-            vehicle_no: data.vehicle_no || '-',
-            farmer_code: farmerCode,
-            farmer_name: farmerName || '-',
-            farmer_address: farmerAddress || '-',
-            date: data.date
-        }).then(smsRes => {
-            console.log('BOS SMS (completeDraft) - Dispatch response:', smsRes);
-        }).catch(e => console.warn('BOS SMS (completeDraft) send error:', e.message));
-    } else {
-        console.warn('BOS SMS (completeDraft) - No farmer mobile number found for SMS');
-    }
-
-    // --- Send SMS to customer after draft completion ---
-    try {
-        const { customerPhone, customerBalance, customerName } = await fetchCustomerInfo(data.customer);
-        const customerMobiles = [];
-        if (customerPhone && String(customerPhone).trim()) customerMobiles.push(String(customerPhone).trim());
-
-        if (!customerMobiles.length && data.customer_details?.telephone) {
-            customerMobiles.push(String(data.customer_details.telephone).trim());
-        }
-
-        console.log(`BOS SMS (completeDraft) - Customer recipients:`, customerMobiles);
-
-        if (customerMobiles.length > 0) {
-            const netKg = +(totalWeight).toFixed(2);
-            const custName = customerName || data.customer_details?.customer_name || '';
-            const customerLabel = `${data.customer || '-'} - ${custName}`;
-            const cleanCustomerLabel = customerLabel.trim().replace(/ - $/, '');
-            sendBosCustomerSMS({
-                mobiles: customerMobiles,
-                net_weight: netKg,
-                farmer_label: cleanCustomerLabel,
-                vehicle_no: data.vehicle_no || '-',
-                rate: data.rate || '0',
-                balance: customerBalance
-            }).then(smsRes => {
-                console.log('BOS SMS (completeDraft) - Customer dispatch response:', smsRes);
-            }).catch(e => console.warn('BOS SMS (completeDraft) customer send error:', e.message));
-        } else {
-            console.warn('BOS SMS (completeDraft) - No customer mobile number found for SMS');
-        }
-    } catch (custSmsErr) { console.warn('BOS SMS (completeDraft) customer block error:', custSmsErr.message); }
-
-} catch (smsErr) { console.warn('SMS block error (completeDraft):', smsErr.message); }
+// --- Send SMS asynchronously after draft completion (non-blocking) ---
+        dispatchBosSmsAsync(data, 'completeDraft');
 
 const latestRecord = await query(
 `

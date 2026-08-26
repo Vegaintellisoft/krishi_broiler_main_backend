@@ -916,12 +916,14 @@ exports.addDC = async (req, res) => {
         const updatedMaterials = poMaterials.map(material => {
             const dispatched = materials.find(d => d.mat_id.toString() === material.mat_id.toString());
             if (dispatched) {
-                const newQty = material.quantity - dispatched.quantity;
-                const newBags = material.noOfBags - dispatched.noOfBags;
+                // FIX: Force Number() to prevent string coercion issues from JSONB or mobile payload
+                const newQty = Number(material.quantity) - Number(dispatched.quantity);
+                const newBags = Number(material.noOfBags) - Number(dispatched.noOfBags);
                 return {
                     ...material,
-                    quantity: newQty < 0 ? 0 : newQty,
-                    noOfBags: newBags < 0 ? 0 : newBags
+                    price: Number(material.price),   // FIX: Explicitly protect original PO price (never take from mobile)
+                    quantity: newQty < 0 ? 0 : Number(newQty.toFixed(3)),
+                    noOfBags: newBags < 0 ? 0 : Math.round(newBags)
                 };
             }
             return material;
@@ -929,7 +931,8 @@ exports.addDC = async (req, res) => {
 
         await query(`UPDATE PO SET materials = $1 WHERE rr_no = $2`, [JSON.stringify(updatedMaterials), rr_no]);
 
-        const allZero = updatedMaterials.every(m => m.quantity === 0 && m.noOfBags === 0);
+        // FIX: Use Number() comparison so "0" (string from JSONB) === 0 works correctly
+        const allZero = updatedMaterials.every(m => Number(m.quantity) === 0 && Number(m.noOfBags) === 0);
         if (allZero) {
             await query(`UPDATE PO SET status = 4 WHERE rr_no = $1`, [rr_no]);
         }
@@ -1064,12 +1067,21 @@ exports.addDC = async (req, res) => {
             const finalPdfUrl = `${process.env.SERVER_URL}/challans/${fileName}`;
 
             const browser = await puppeteer.launch({
-                headless: 'new',
-                args: ['--no-sandbox', '--disable-setuid-sandbox'],
-                executablePath: getChromiumPath(),
-            });
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu'
+            ],
+            executablePath: getChromiumPath(),
+        });
             const page = await browser.newPage();
-            await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+            await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
             await page.pdf({
                 path: filePath,
                 format: 'A4',
@@ -1327,11 +1339,20 @@ exports.generateChallanPDFByData = async (req, res) => {
 
         const browser = await puppeteer.launch({
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu'
+            ],
             executablePath: getChromiumPath(),
         });
         const page = await browser.newPage();
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
 
         await page.pdf({
             path: filePath,
@@ -1664,11 +1685,20 @@ exports.generateChallanPDFByViewData = async (req, res) => {
 
         const browser = await puppeteer.launch({
             headless: 'new',
-            args: ['--no-sandbox', '--disable-setuid-sandbox'],
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu'
+            ],
             executablePath: getChromiumPath(),
         });
         const page = await browser.newPage();
-        await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 15000 });
         await page.pdf({
             path: filePath,
             format: 'A4',
@@ -1856,8 +1886,9 @@ exports.cancelDC = async (req, res) => {
             [JSON.stringify(restoredMaterials), rr_no]
         );
 
+        // FIX: Use Number() comparison so "0" (string from JSONB) is handled correctly
         const allZero = restoredMaterials.every(
-            m => m.quantity === 0 && m.noOfBags === 0
+            m => Number(m.quantity) === 0 && Number(m.noOfBags) === 0
         );
 
         if (!allZero) {

@@ -1,3 +1,4 @@
+process.env.TZ = 'Asia/Kolkata';
 const { Pool } = require('pg');
 
 const pool = new Pool({
