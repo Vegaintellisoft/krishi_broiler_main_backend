@@ -1106,6 +1106,15 @@ async function fetchAndNormalizeActivities({ category = 'Broiler', sourceFilter 
                     seenDeduplicationKeys.add(`fa_${uname}_${plant}_${farmer}_${faDate}`.toLowerCase());
                 }
             }
+            // Loose key: user + activity date (catches cases where plant/farmer format differs between audit log body vs DB)
+            if (uname && faDate) {
+                seenDeduplicationKeys.add(`fa_loose_${uname}_${faDate}`.toLowerCase());
+            }
+            // Also register the audit log creation timestamp minute to catch by time window
+            if (uname && l.created_at) {
+                const auditMinute = new Date(l.created_at).toISOString().slice(0, 16); // yyyy-MM-ddTHH:mm
+                seenDeduplicationKeys.add(`fa_time_${uname}_${auditMinute}`.toLowerCase());
+            }
         }
 
         combined.push({
@@ -1166,6 +1175,7 @@ async function fetchAndNormalizeActivities({ category = 'Broiler', sourceFilter 
                 }
 
                 if (rec.module === 'Farm Activity' && rec.payload) {
+                    // Check by DB record ID (most reliable)
                     if (rec.payload.id && seenDeduplicationKeys.has(`fa_id_${rec.payload.id}`)) return;
                     if (rec.record_id && seenDeduplicationKeys.has(`fa_id_${rec.record_id}`)) return;
                     const faDate = normalizeDateStr(rec.payload.date) || (rec.created_at ? new Date(rec.created_at).toISOString().slice(0, 10) : '');
@@ -1176,6 +1186,16 @@ async function fetchAndNormalizeActivities({ category = 'Broiler', sourceFilter 
                         if (seenDeduplicationKeys.has(`fa_${plant}_${farmer}_${faDate}`.toLowerCase())) return;
                         if (uname && seenDeduplicationKeys.has(`fa_${uname}_${plant}_${farmer}_${faDate}`.toLowerCase())) return;
                     }
+                    // Loose check: same user + same activity date (catches format mismatch between req.body date vs DB date)
+                    if (uname && faDate && seenDeduplicationKeys.has(`fa_loose_${uname}_${faDate}`.toLowerCase())) return;
+                    // Time-window check: same user within same minute of creation
+                    if (uname && rec.created_at) {
+                        const recMinute = new Date(rec.created_at).toISOString().slice(0, 16);
+                        if (seenDeduplicationKeys.has(`fa_time_${uname}_${recMinute}`.toLowerCase())) return;
+                    }
+                    // Register operational record's own ID so it won't be added twice
+                    if (rec.payload.id) seenDeduplicationKeys.add(`fa_id_${rec.payload.id}`);
+                    if (rec.record_id) seenDeduplicationKeys.add(`fa_id_${rec.record_id}`);
                 }
 
                 // Not a duplicate: register and add

@@ -17,7 +17,8 @@ const {
     getAvailableAdmin,
     getFarmActivityReport,
     getBroilerDashboardReport,
-    getBroilerFarmActivityDetails
+    getBroilerFarmActivityDetails,
+    getBroilerLoginDetails
 } = require("../controllers/adminController");
 
 const {
@@ -44,6 +45,7 @@ router.get("/getAdminSummary", getAdminSummary);
 router.get("/farm-activity-report", getFarmActivityReport);
 router.get("/broiler-dashboard-report", getBroilerDashboardReport);
 router.get("/broiler-farm-activity-details", getBroilerFarmActivityDetails);
+router.get("/broiler-login-details", getBroilerLoginDetails);
 
 // --- Activity Monitor Routes ---
 router.get("/activity-logs/all", getAllActivityLogs);

@@ -715,6 +715,9 @@ exports.getTruckStatusSummary = async (req, res) => {
 
         const result = await query(`
     SELECT
+        p.id,
+        p.status,
+        p.materials,
         p.rr_no,
         p.po_no,
         s.name AS supplier_name,
@@ -966,7 +969,10 @@ exports.getBroilerDashboardReport = async (req, res) => {
             [fromDate, toDate]
         );
         const [loginsResult] = await query(
-            `SELECT COUNT(*)::int AS total_logins, COUNT(DISTINCT username)::int AS unique_users FROM public.user_login_logs WHERE login_time::date BETWEEN $1::date AND $2::date`,
+            `SELECT COUNT(*)::int AS total_logins, COUNT(DISTINCT l.username)::int AS unique_users 
+             FROM public.user_login_logs l 
+             WHERE l.login_time::date BETWEEN $1::date AND $2::date
+               AND l.username IN (SELECT d.username FROM public.driver d WHERE (d.category = 'Broiler' OR d.category IS NULL OR d.category = ''))`,
             [fromDate, toDate]
         );
 
@@ -1030,9 +1036,10 @@ exports.getBroilerDashboardReport = async (req, res) => {
             SELECT 
                 ${loginGroupingSql},
                 COUNT(*)::int AS login_count,
-                COUNT(DISTINCT username)::int AS user_count
-            FROM public.user_login_logs
-            WHERE login_time::date BETWEEN $1 AND $2
+                COUNT(DISTINCT l.username)::int AS user_count
+            FROM public.user_login_logs l
+            WHERE l.login_time::date BETWEEN $1 AND $2
+              AND l.username IN (SELECT d.username FROM public.driver d WHERE (d.category = 'Broiler' OR d.category IS NULL OR d.category = ''))
             GROUP BY period_date
             ORDER BY period_date DESC;
         `;
@@ -1300,6 +1307,147 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
         res.status(500).json({
             status: false,
             message: "Error fetching farm activity details",
+            error: error.message
+        });
+    }
+};
+
+
+exports.getBroilerLoginDetails = async (req, res) => {
+    try {
+        const { date, period = 'daily' } = req.query;
+
+        if (!date) {
+            return res.status(400).json({
+                status: false,
+                message: "date is a required query parameter"
+            });
+        }
+
+        let dateCondition = '';
+        if (period === 'monthly') {
+            dateCondition = "TO_CHAR(DATE_TRUNC('month', l.login_time), 'YYYY-MM') = $1";
+        } else if (period === 'weekly') {
+            dateCondition = "TO_CHAR(DATE_TRUNC('week', l.login_time), 'YYYY-MM-DD') = $1";
+        } else {
+            dateCondition = "TO_CHAR(l.login_time::date, 'YYYY-MM-DD') = $1";
+        }
+
+        // Fetch plant mapping
+        const plantResult = await query("SELECT plant_id, plant_name FROM broiler.plant");
+        const plantMap = {};
+        plantResult.forEach(row => {
+            if (row.plant_id) {
+                plantMap[String(row.plant_id).trim()] = row.plant_name;
+            }
+        });
+
+        // Fetch mobile driver user maps (Mobile users only) with plant_id
+        const drivers = await query("SELECT username, fullname, role, category, plant_id FROM public.driver WHERE (category = 'Broiler' OR category IS NULL OR category = '')");
+        
+        const userMap = {};
+        drivers.forEach(d => {
+            if (d.username) {
+                const pKey = String(d.plant_id || '').trim();
+                let plantName = '-';
+                if (pKey) {
+                    if (pKey.toLowerCase() === 'all') {
+                        plantName = 'All Plants';
+                    } else {
+                        plantName = plantMap[pKey] || pKey;
+                    }
+                }
+
+                userMap[String(d.username).trim().toLowerCase()] = {
+                    fullname: d.fullname || d.username,
+                    role: d.role || 'Supervisor',
+                    category: d.category || 'Broiler',
+                    plant_id: d.plant_id || null,
+                    plant_name: plantName
+                };
+            }
+        });
+
+        // 1. Grouped by mobile user for clean summarized view
+        const userSummarySql = `
+            SELECT 
+                l.username,
+                COUNT(*)::int AS login_count,
+                MIN(l.login_time) AS first_login,
+                MAX(l.login_time) AS last_login,
+                ARRAY_AGG(TO_CHAR(l.login_time, 'HH12:MI AM') ORDER BY l.login_time ASC) AS login_times
+            FROM public.user_login_logs l
+            WHERE ${dateCondition}
+              AND l.username IN (SELECT d.username FROM public.driver d WHERE (d.category = 'Broiler' OR d.category IS NULL OR d.category = ''))
+            GROUP BY l.username
+            ORDER BY last_login DESC;
+        `;
+        const userSummaryRows = await query(userSummarySql, [date]);
+
+        const users = userSummaryRows.map(row => {
+            const uKey = String(row.username || '').trim().toLowerCase();
+            const meta = userMap[uKey] || {};
+            return {
+                username: row.username,
+                fullname: meta.fullname || row.username,
+                role: meta.role || 'Supervisor',
+                category: meta.category || 'Broiler',
+                plant_id: meta.plant_id || null,
+                plant_name: meta.plant_name || '-',
+                login_count: row.login_count,
+                first_login: row.first_login,
+                last_login: row.last_login,
+                login_times: row.login_times || []
+            };
+        });
+
+        // 2. All individual mobile login events
+        const individualLoginsSql = `
+            SELECT 
+                l.id,
+                l.username,
+                l.fullname,
+                l.role,
+                l.category,
+                l.login_time,
+                TO_CHAR(l.login_time, 'YYYY-MM-DD HH12:MI:SS AM') AS formatted_time,
+                TO_CHAR(l.login_time, 'HH12:MI:SS AM') AS time_only
+            FROM public.user_login_logs l
+            WHERE ${dateCondition}
+              AND l.username IN (SELECT d.username FROM public.driver d WHERE (d.category = 'Broiler' OR d.category IS NULL OR d.category = ''))
+            ORDER BY l.login_time DESC;
+        `;
+        const allLogins = await query(individualLoginsSql, [date]);
+        const enrichedLogins = allLogins.map(l => {
+            const uKey = String(l.username || '').trim().toLowerCase();
+            const meta = userMap[uKey] || {};
+            return {
+                ...l,
+                fullname: meta.fullname || l.fullname || l.username,
+                role: meta.role || l.role || 'Supervisor',
+                category: meta.category || l.category || 'Broiler',
+                plant_id: meta.plant_id || null,
+                plant_name: meta.plant_name || '-'
+            };
+        });
+
+        return res.status(200).json({
+            status: true,
+            data: {
+                date,
+                period,
+                total_logins: enrichedLogins.length,
+                unique_users: users.length,
+                users,
+                allLogins: enrichedLogins
+            }
+        });
+
+    } catch (error) {
+        console.error("Error fetching broiler login details: ", error);
+        res.status(500).json({
+            status: false,
+            message: "Error fetching broiler login details",
             error: error.message
         });
     }
