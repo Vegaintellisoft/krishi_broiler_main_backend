@@ -2,7 +2,7 @@ const router = require("express").Router();
 
 const { getAll, addDC, updateDC, generateChallanPDF, generateChallanPDFByData,
     generateChallanPDFByViewData, cancelDC, getAllById, getTokenNo,
-    toggleArrivedStatus, getDashboardData
+    toggleArrivedStatus, getDashboardData, updateTruckNo
 } = require("../controllers/dcController");
 
 router.get("/getAll{/:location_id}", getAll);
@@ -15,5 +15,6 @@ router.put("/arrived/:id", toggleArrivedStatus);
 router.post("/getChallan", generateChallanPDFByData);
 router.post("/getChallanByView", generateChallanPDFByViewData);
 router.put("/cancelDc/:id", cancelDC);
+router.put("/updateTruckNo/:id", updateTruckNo);
 
 module.exports = router;

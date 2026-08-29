@@ -1,3 +1,74 @@
+function parseDateForDb(val) {
+    if (!val) return null;
+    const str = String(val).trim();
+    if (!str) return null;
+    // If format is DD/MM/YYYY or DD-MM-YYYY
+    const ddmmyyyy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (ddmmyyyy) {
+        const day = ddmmyyyy[1].padStart(2, '0');
+        const month = ddmmyyyy[2].padStart(2, '0');
+        const year = ddmmyyyy[3];
+        return `${year}-${month}-${day}`;
+    }
+    // If format is YYYY-MM-DD or ISO
+    const yyyymmdd = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (yyyymmdd) {
+        const year = yyyymmdd[1];
+        const month = yyyymmdd[2].padStart(2, '0');
+        const day = yyyymmdd[3].padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+    }
+    return null;
+}
+
+const fs = require('fs');
+const path = require('path');
+
+const saveBase64Photos = (rawPhotos, prefix = 'photo') => {
+    if (!rawPhotos) return rawPhotos;
+    let photos = rawPhotos;
+    if (typeof photos === 'string') {
+        try { photos = JSON.parse(photos); } catch (_) { return rawPhotos; }
+    }
+    if (!Array.isArray(photos)) {
+        if (typeof photos === 'object' && photos !== null) photos = [photos];
+        else return rawPhotos;
+    }
+
+    const uploadDir = path.join(process.cwd(), 'uploads', 'broiler');
+    if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const processed = photos.map(photo => {
+        if (photo && typeof photo === 'object' && photo.base64) {
+            try {
+                const ext = (photo.type && photo.type.includes('png')) ? '.png' : '.jpg';
+                const cleanFileName = photo.fileName ? photo.fileName.replace(/[^a-zA-Z0-9._-]/g, '_') : (prefix + '_' + Date.now() + '_' + Math.round(Math.random() * 1000000) + ext);
+                const filePath = path.join(uploadDir, cleanFileName);
+                const base64Data = photo.base64.replace(/^data:image\/\w+;base64,/, '');
+                fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+                return {
+                    ...photo,
+                    fileName: cleanFileName,
+                    url: '/uploads/broiler/' + cleanFileName,
+                    path: '/uploads/broiler/' + cleanFileName,
+                };
+            } catch (err) {
+                console.error('Error saving base64 photo to disk:', err.message);
+                return photo;
+            }
+        }
+        return photo;
+    });
+
+    return JSON.stringify(processed);
+};
+
 const qs = require('qs');
 const { format, parse, isValid } = require('date-fns');
 
@@ -132,6 +203,9 @@ exports.create = async (req, res) => {
         updatedData.date = formattedDate;
         updatedData.sap_status = false;
         updatedData.user_id = user_id;
+        if (updatedData.upload_mortality) updatedData.upload_mortality = saveBase64Photos(updatedData.upload_mortality, "mortality");
+        if (updatedData.upload_start_km) updatedData.upload_start_km = saveBase64Photos(updatedData.upload_start_km, "start_km");
+        if (updatedData.upload_end_km) updatedData.upload_end_km = saveBase64Photos(updatedData.upload_end_km, "end_km");
 
         // console.log(updatedData)
         // Handle file upload (relative path only)
@@ -182,81 +256,127 @@ exports.submit = async (req, res) => {
     try {
         const { date, plant, total_farms, user_id, end_km, upload_end_km, running_km } = req.body;
 
-        // 🔹 Format date
-        let formattedDate = date;
-        if (date) {
-            const parsedDate = parse(date, 'd/M/yyyy', new Date());
-            if (!isNaN(parsedDate)) {
-                formattedDate = format(parsedDate, 'yyyy-MM-dd');
-            }
-        }
+        // ── Format date ──
+        const formattedDate = parseDateForDb(date) || parseDateForDb(new Date());
 
         const plantList = (plant && plant !== 'NaN' && plant !== 'all' && plant !== 'null' && plant !== 'undefined')
             ? String(plant).split(',').map(p => p.trim()).filter(Boolean)
             : [];
 
-        // 🔹 If end_km is supplied, update all draft records first
-        if (end_km) {
-            let uploadEndKmStr = upload_end_km;
-            if (upload_end_km && typeof upload_end_km !== 'string') {
-                uploadEndKmStr = JSON.stringify(upload_end_km);
+        // ── If end_km is supplied, update all draft records first ──
+        if (end_km !== undefined && end_km !== null && end_km !== '') {
+            let processedEndKmPhotos = upload_end_km;
+            if (upload_end_km) {
+                processedEndKmPhotos = saveBase64Photos(upload_end_km, "end_km");
             }
+            let uploadEndKmStr = processedEndKmPhotos;
+            if (uploadEndKmStr && typeof uploadEndKmStr !== 'string') {
+                uploadEndKmStr = JSON.stringify(uploadEndKmStr);
+            }
+
             let updateQueryText = `
-                UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}
-                SET end_km = $1, upload_end_km = COALESCE($2::jsonb, upload_end_km), running_km = $3
+                UPDATE broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
+                SET end_km = $1, 
+                    upload_end_km = CASE 
+                        WHEN $2::jsonb IS NOT NULL AND jsonb_array_length($2::jsonb) > 0 THEN $2::jsonb 
+                        ELSE upload_end_km 
+                    END, 
+                    running_km = $3
                 WHERE date = $4 AND sap_status = false`;
-            let updateParams = [end_km, uploadEndKmStr || null, running_km || null, formattedDate];
+            let updateParams = [Number(end_km), uploadEndKmStr || null, Number(running_km) || null, formattedDate];
 
             if (plantList.length === 1) {
                 updateParams.push(plantList[0]);
-                updateQueryText += ` AND plant = $${updateParams.length}`;
+                updateQueryText += " AND plant = $" + updateParams.length;
             } else if (plantList.length > 1) {
                 updateParams.push(plantList);
-                updateQueryText += ` AND plant = ANY($${updateParams.length}::text[])`;
+                updateQueryText += " AND plant = ANY($" + updateParams.length + "::text[])";
             }
 
             if (user_id) {
                 updateParams.push(String(user_id));
-                updateQueryText += ` AND user_id = $${updateParams.length}`;
+                updateQueryText += " AND user_id = $" + updateParams.length;
             }
-            updateQueryText += `;`;
-            await query(updateQueryText, updateParams);
+            updateQueryText += ";";
+            const updateRes = await query(updateQueryText, updateParams);
+
+            // Fallback: If 0 rows updated with user_id, update without user_id filter for the same plant & date
+            if ((!updateRes || updateRes.length === 0) && user_id) {
+                let fallbackUpdateText = `
+                    UPDATE broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
+                    SET end_km = $1, 
+                        upload_end_km = CASE 
+                            WHEN $2::jsonb IS NOT NULL AND jsonb_array_length($2::jsonb) > 0 THEN $2::jsonb 
+                            ELSE upload_end_km 
+                        END, 
+                        running_km = $3
+                    WHERE date = $4 AND sap_status = false`;
+                let fallbackParams = [Number(end_km), uploadEndKmStr || null, Number(running_km) || null, formattedDate];
+                if (plantList.length === 1) {
+                    fallbackParams.push(plantList[0]);
+                    fallbackUpdateText += " AND plant = $" + fallbackParams.length;
+                } else if (plantList.length > 1) {
+                    fallbackParams.push(plantList);
+                    fallbackUpdateText += " AND plant = ANY($" + fallbackParams.length + "::text[])";
+                }
+                fallbackUpdateText += ";";
+                await query(fallbackUpdateText, fallbackParams);
+            }
         }
 
-        // 🔹 Fetch draft records (filtered by user_id)
+        // ── Fetch draft records ──
         let fetchQuery = `
             SELECT * 
-            FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable}
+            FROM broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
             WHERE date = $1 
             AND sap_status = false`;
         const fetchParams = [formattedDate];
 
         if (plantList.length === 1) {
             fetchParams.push(plantList[0]);
-            fetchQuery += ` AND plant = $${fetchParams.length}`;
+            fetchQuery += " AND plant = $" + fetchParams.length;
         } else if (plantList.length > 1) {
             fetchParams.push(plantList);
-            fetchQuery += ` AND plant = ANY($${fetchParams.length}::text[])`;
+            fetchQuery += " AND plant = ANY($" + fetchParams.length + "::text[])";
         }
 
         if (user_id) {
             fetchParams.push(String(user_id));
-            fetchQuery += ` AND user_id = $${fetchParams.length}`;
+            fetchQuery += " AND user_id = $" + fetchParams.length;
         }
-        fetchQuery += `;`;
+        fetchQuery += ";";
 
-        const dbResult = await query(fetchQuery, fetchParams);
+        let dbResult = await query(fetchQuery, fetchParams);
+
+        // Fallback: If no records found with user_id filter, check without user_id filter
+        if (dbResult.length === 0 && user_id) {
+            let fallbackFetch = `
+                SELECT * 
+                FROM broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
+                WHERE date = $1 
+                AND sap_status = false`;
+            const fallbackFetchParams = [formattedDate];
+            if (plantList.length === 1) {
+                fallbackFetchParams.push(plantList[0]);
+                fallbackFetch += " AND plant = $" + fallbackFetchParams.length;
+            } else if (plantList.length > 1) {
+                fallbackFetchParams.push(plantList);
+                fallbackFetch += " AND plant = ANY($" + fallbackFetchParams.length + "::text[])";
+            }
+            fallbackFetch += ";";
+            dbResult = await query(fallbackFetch, fallbackFetchParams);
+        }
 
         if (dbResult.length === 0) {
             return res.status(404).json({
                 status: false,
-                message: "No draft records found to submit"
+                message: "No draft records found to submit for " + formattedDate
             });
         }
 
         const rows = dbResult;
 
-        // 🔹 Send all rows to SAP
+        // ── Send all rows to SAP ──
         const sapPromises = rows.map(row => {
             let formattedRow = { ...row };
 
@@ -272,17 +392,21 @@ exports.submit = async (req, res) => {
 
         const results = await Promise.allSettled(sapPromises);
 
-        // 🔹 Separate success & failed
+        // ── Separate success & failed ──
         const successIds = [];
         const failed = [];
 
         results.forEach((result, index) => {
-            if (result.status === 'fulfilled' && (result.value?.status === true || result.value?.status === 'true')) {
+            const val = result.status === 'fulfilled' ? result.value : null;
+            if (val && (val.status === true || val.status === 'true')) {
                 successIds.push(rows[index].id);
             } else {
+                const errDetail = result.reason || val?.data || val?.message || 'SAP Submission Failed';
+                let cleanErr = typeof errDetail === 'string' ? errDetail : (errDetail?.message || JSON.stringify(errDetail) || 'Error');
                 failed.push({
                     id: rows[index].id,
-                    error: result.reason || result.value?.data || result.value
+                    farmer: rows[index].farmer,
+                    error: cleanErr
                 });
             }
         });
@@ -290,20 +414,21 @@ exports.submit = async (req, res) => {
         console.log("success ids : ", successIds);
         console.log("failed ids  : ", failed);
 
-        // 🔹 Update successful records
+        // ── Update successful records ──
         if (successIds.length > 0) {
             const updateQuery = `
-                UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}
+                UPDATE broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
                 SET sap_status = true
                 WHERE id = ANY($1::int[]);
             `;
             await query(updateQuery, [successIds]);
         }
 
-        // 🔹 Final response
+        // ── Final response ──
+        const isOverallSuccess = successIds.length > 0 || (failed.length === 0 && rows.length > 0);
         return res.status(200).json({
-            status: true,
-            message: "SAP submission completed",
+            status: isOverallSuccess,
+            message: successIds.length > 0 ? `Successfully submitted ${successIds.length} farm activity records to SAP` : "SAP submission failed",
             success_count: successIds.length,
             failed_count: failed.length,
             failed_records: failed
@@ -313,7 +438,7 @@ exports.submit = async (req, res) => {
         console.error("Error while submitting farm activity:", error);
         res.status(500).json({
             status: false,
-            message: "Error while submitting farm activity",
+            message: error.message || "Error while submitting farm activity",
             error: error.message,
         });
     }

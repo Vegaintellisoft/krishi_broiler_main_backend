@@ -4,49 +4,55 @@ const broilerDataEntry = require("./broilerDataEntry.json");
 
 
 const getDOCMaterialData = async (plant, farmer) => {
-  let qsString = qs.stringify(
-    { "sap-client": "500", werks: plant, lifnr: farmer },
-    { encode: true }
-  );
-  const finalUrl = `${process.env.BROILER_SAP_BASE_URL}/zdaily_mort?${qsString}`;
-  console.log("final url get : ", finalUrl);
+  try {
+    let qsString = qs.stringify(
+      { "sap-client": "500", werks: plant, lifnr: farmer },
+      { encode: true }
+    );
+    const finalUrl = `${process.env.BROILER_SAP_BASE_URL}/zdaily_mort?${qsString}`;
+    console.log("final url get : ", finalUrl);
 
-  let config = {
-    method: 'get',
-    maxBodyLength: Infinity,
-    url: finalUrl,
-    auth: {
-      username: process.env.BROILER_SAP_USERNAME,
-      password: process.env.BROILER_SAP_PASSWORD
+    let config = {
+      method: 'get',
+      maxBodyLength: Infinity,
+      url: finalUrl,
+      auth: {
+        username: process.env.BROILER_SAP_USERNAME,
+        password: process.env.BROILER_SAP_PASSWORD
+      },
+      timeout: 10000
+    };
+
+    const response = await axios.request(config);
+
+    if (response.status !== 200) {
+      return { status: false, data: "sap error" };
     }
-  };
 
-  const response = await axios.request(config);
+    const dmcDet = response.data?.[0]?.dmcDet?.[0];
 
-  if (response.status !== 200) {
-    return { status: false, data: "sap error" }
+    if (!dmcDet) {
+      return { status: false, data: "No dmcDet data found" };
+    }
+
+    const result = {
+      matnr: dmcDet.matnr,
+      maktx: dmcDet.maktx,
+      meins: dmcDet.meins,
+      enmng: dmcDet.enmng,
+      // Standard values provided by SAP GET based on bird age
+      zzSbwt: dmcDet.zzSbwt,   // Standard Body Weight
+      zzStdg: dmcDet.zzStdg,   // Standard daily given (D.F.I STD Grams)
+      zzScf: dmcDet.zzScf     // Standard Stock cum feed (STD CFI Per Bird)
+    };
+    console.log(result);
+
+    return { status: true, data: result };
+  } catch (err) {
+    console.warn("getDOCMaterialData warning:", err.message);
+    return { status: false, data: err.message };
   }
-
-  const dmcDet = response.data?.[0]?.dmcDet?.[0];
-
-  if (!dmcDet) {
-    return { status: false, data: "No dmcDet data found" }
-  }
-
-  const result = {
-    matnr: dmcDet.matnr,
-    maktx: dmcDet.maktx,
-    meins: dmcDet.meins,
-    enmng: dmcDet.enmng,
-    // Standard values provided by SAP GET based on bird age
-    zzSbwt: dmcDet.zzSbwt,   // Standard Body Weight
-    zzStdg: dmcDet.zzStdg,   // Standard daily given (D.F.I STD Grams)
-    zzScf: dmcDet.zzScf     // Standard Stock cum feed (STD CFI Per Bird)
-  };
-  console.log(result)
-
-  return { status: true, data: result }
-}
+};
 
 const formatDataToSap = (sapName, data) => {
   const config = broilerDataEntry[sapName];
@@ -194,17 +200,15 @@ const sapSubmit = async (sapName, data) => {
     // console.log("Background SAP Response:", response);
 
     if (response.status !== 200) {
-      console.log("sap failed")
-      console.log(response.reason)
-      return { status: false, data: "sap error" }
+      console.log("sap failed");
+      return { status: false, data: response.statusText || "sap error" };
     }
-    // console.log("Background SAP Response:", response.data);
     console.log("Background SAP Response status:", response.status);
-    // console.log("Background SAP Response:", response.statusText);
 
-    return { status: true, data: response }
+    return { status: true, data: response.data || { success: true } };
   } catch (error) {
-    return { status: false, data: error }
+    console.error("sapSubmit error:", error?.response?.data || error.message);
+    return { status: false, data: error.response?.data || error.message || "SAP Error" };
   }
 }
 

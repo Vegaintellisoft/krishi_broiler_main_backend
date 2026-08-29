@@ -8,107 +8,138 @@ const SAP_BASE_URL = process.env.SAP_BASE_URL;
 const SAP_USERNAME = process.env.SAP_USERNAME;
 const SAP_PASSWORD = process.env.SAP_PASSWORD;
 
+function formatDate(val) {
+    if (!val) return '-';
+    try {
+        const d = new Date(val);
+        if (isNaN(d.getTime())) return String(val);
+        const day = String(d.getDate()).padStart(2, '0');
+        const month = String(d.getMonth() + 1).padStart(2, '0');
+        const year = d.getFullYear();
+        return `${day}/${month}/${year}`;
+    } catch (_) {
+        return String(val);
+    }
+}
+
+function formatTime(val) {
+    if (!val) return '-';
+    try {
+        const d = new Date(val);
+        if (isNaN(d.getTime())) return String(val);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    } catch (_) {
+        return String(val);
+    }
+}
 
 exports.getDetailedReport = async (req, res) => {
     try {
-        // --- 1. Handle Date Filtering ---
-        // Get dates from query params or default to today
         let { startDate, endDate } = req.query;
 
         if (!startDate || !endDate) {
             const today = new Date();
-            // Format to YYYY-MM-DD for SQL 'BETWEEN' clause
             const todayString = today.toISOString().split('T')[0];
             startDate = startDate || todayString;
             endDate = endDate || todayString;
         }
 
-        // --- 2. Construct the Main SQL Query ---
-        // This query unnests the materials JSONB and joins all necessary tables.
         const reportQuery = `
             SELECT
                 dc.id as s_no,
-                dc.created_at AS doc_date,
+                dc.created_at AS dc_created_at,
                 dc.is_send_sap,
                 dc.status,
                 dc.reason,
                 dc.doc_no,
-                sl.address ->> 'full_address' AS "address",
-                sa.address ->> 'full_address' AS "to",
                 dc.truck_no,
+                dc.rr_no,
+                
+                -- Location details
+                sl.name AS dispatch_from_name,
+                sl.address ->> 'full_address' AS dispatch_from_address,
+                sa.sap_name AS branch_name,
+                sa.sap_code AS branch_code,
+                sa.address ->> 'full_address' AS branch_address,
+                
+                -- E-Way Bill details
                 ewb.ewbno AS e_way_bill_no,
+                ewb.ewb_date AS e_way_bill_date,
                 ewb.distance,
                 
+                -- PO & Supplier details
+                po_material.po_no,
+                po_material.po_date,
+                po_material.rr_date,
+                po_material.bill_no AS supplier_inv_no,
+                po_material.supplier_invoice_date AS supplier_inv_date,
+                s.supplier_id AS supplier_code,
+                s.name AS supplier_name,
+                
                 -- Unnested material data from delivery_challan's JSONB
-                material_details.name AS materials,
-                (material_details.quantity)::numeric AS quantity,
                 material_details.mat_id,
+                material_details.name AS materials,
+                material_details.unit_name,
                 material_details."noOfBags" AS no_of_bags,
-                mat.hsn_code as material_hsn,
-                mat.hsn_code,
-                mat.id AS material_number,
-
-                -- Data from joined PO and Material tables for calculation
-                po_material.supplier__id,
-                (po_material.price)::numeric AS base_price,
+                (material_details.quantity)::numeric AS quantity,
+                
+                -- Material Master details
+                mat.id AS material_id,
+                mat.material_code,
                 mat.hsn_code,
                 (mat.cgst)::numeric AS cgst_rate,
                 (mat.sgst)::numeric AS sgst_rate,
-            
-                dc.status,
-                dc.reason
+                
+                -- PO Price
+                (po_material.price)::numeric AS base_price
             FROM
                 public.delivery_challan AS dc
             
-            -- This is the key part: it expands the JSONB array into separate rows
-            CROSS JOIN LATERAL jsonb_to_recordset(dc.materials::jsonb) AS material_details(id int, mat_id text, name text, quantity text, "noOfBags" text, unit_name text)
+            CROSS JOIN LATERAL jsonb_to_recordset(dc.materials::jsonb) 
+                AS material_details(id int, mat_id text, name text, quantity text, "noOfBags" text, unit_name text)
             
-            -- Standard joins for related info
             LEFT JOIN source_location sl ON dc.dispatch_from_id = sl.id
             LEFT JOIN public.shipping_address AS sa ON dc.ship_to__id = sa.id
-            LEFT JOIN public.ewaybill AS ewb ON dc.doc_no = ewb.doc_id
+            LEFT JOIN public.ewaybill AS ewb ON (dc.doc_no = ewb.doc_id OR dc.token_no = ewb.doc_id)
             
-            -- Join to get material info like HSN code and tax rates
-            -- Assumes a 'material' table exists with this data
             LEFT JOIN public.material AS mat ON (material_details.mat_id)::integer = mat.id
             
-            -- Join to get the price from the original PO
-            -- This sub-select is needed to find the specific material within the PO's JSONB array
             LEFT JOIN (
                 SELECT 
                     p.rr_no,
+                    p.po_no,
+                    p.bill_no,
                     p.supplier__id,
+                    p.po_date,
+                    p.rr_date,
+                    p.supplier_invoice_date,
                     (po_mat ->> 'mat_id') AS mat_id,
                     (po_mat ->> 'price') AS price
                 FROM public.po p, jsonb_array_elements(p.materials) AS po_mat
             ) AS po_material ON dc.rr_no = po_material.rr_no AND material_details.mat_id = po_material.mat_id
             
+            LEFT JOIN public.supplier s ON po_material.supplier__id = s.id
+            
             WHERE
-                -- Filter by the specified date range
                 dc.created_at::date BETWEEN $1 AND $2
             
             ORDER BY
-                dc.id ASC;
+                dc.id ASC, material_details.mat_id ASC;
         `;
 
         const result = await query(reportQuery, [startDate, endDate]);
 
-        // console.log(result)
-
-        // --- FIX: Add a robust check for the result and its 'rows' property ---
-        if (!result || !result || result.length === 0) {
+        if (!result || result.length === 0) {
             return res.status(200).json({
                 success: true,
                 message: 'No report data found for the selected date range.',
                 data: []
             });
         }
-        const rows = result;
 
-        // --- 3. Process Results and Perform Calculations ---
-        const reportData = rows.map(item => {
-            // console.log("=========> ", item)
+        const reportData = result.map((item, index) => {
             const quantity = Number(item.quantity) || 0;
+            const noOfBags = Number(item.no_of_bags) || 0;
             const basePrice = Number(item.base_price) || 0;
             const cgstRate = Number(item.cgst_rate) || 0;
             const sgstRate = Number(item.sgst_rate) || 0;
@@ -120,34 +151,63 @@ exports.getDetailedReport = async (req, res) => {
             const totalTaxRate = cgstRate + sgstRate;
             const rateInclTax = basePrice * (1 + (totalTaxRate / 100));
 
+            const isDcActive = item.status == 1;
+
             return {
                 s_no: item.s_no,
-                doc_date: new Date(item.doc_date).toLocaleDateString('en-GB'),
-                doc_no: item.doc_no,
-                supplier_id: item.supplier__id,
-                is_send_sap: item.is_send_sap,
-                to: item.to,
-                address: item.address,
-                truck_no: item.truck_no,
-                materials: item.materials,
-                hsn_code: item.hsn_code,
-                material_number: item.material_number,
+                row_index: index + 1,
+                
+                // PO & Supplier Details
+                po_no: item.po_no || '-',
+                po_date: formatDate(item.po_date),
+                rr_no: item.rr_no || '-',
+                rr_date: formatDate(item.rr_date),
+                supplier_code: item.supplier_code || '-',
+                supplier_name: item.supplier_name || '-',
+                supplier_inv_no: item.supplier_inv_no || '-',
+                supplier_inv_date: formatDate(item.supplier_inv_date),
+                
+                // Delivery Challan Details
+                doc_no: item.doc_no || '-',
+                doc_date: formatDate(item.dc_created_at),
+                doc_time: formatTime(item.dc_created_at),
+                dispatch_from: item.dispatch_from_name || item.dispatch_from_address || '-',
+                branch_name: item.branch_name || '-',
+                branch_address: item.branch_address || '-',
+                
+                // Material Details
+                item_code: item.material_code || item.mat_id || '-',
+                item_name: item.materials || '-',
+                item_uom: item.unit_name || 'MTS',
+                hsn_code: item.hsn_code || '-',
+                no_of_bags: noOfBags,
                 quantity: quantity.toFixed(3),
+                
+                // Valuation & Tax
+                item_rate: basePrice.toFixed(2),
                 rate_incl_tax: rateInclTax.toFixed(2),
                 tax_rate: totalTaxRate.toFixed(2),
                 taxable_value: taxableValue.toFixed(2),
                 cgst: cgstAmount.toFixed(2),
                 sgst: sgstAmount.toFixed(2),
                 gross: gross.toFixed(2),
-                e_way_bill_no: item.e_way_bill_no,
-                distance: item.distance,
-                status: item.status == 1 ? "Active" : "Cancelled",
-                reason: item?.reason || "-"
+                
+                // Status & Vehicle
+                dc_status: isDcActive ? 'Active' : 'Cancelled',
+                dc_reason: item.reason || '-',
+                truck_no: item.truck_no || '-',
+                
+                // E-Way Bill Details
+                ewb_type: item.e_way_bill_no ? 'Regular' : '-',
+                e_way_bill_no: item.e_way_bill_no || '-',
+                ewb_date: formatDate(item.e_way_bill_date),
+                ewb_status: item.e_way_bill_no ? (isDcActive ? 'Active' : 'Cancelled') : '-',
+                ewb_reason: (item.e_way_bill_no && !isDcActive) ? (item.reason || '-') : '-',
+                distance: item.distance || 0,
+                
+                is_send_sap: item.is_send_sap
             };
         });
-
-
-        // console.log(reportData)
 
         res.status(200).json({ success: true, data: reportData });
 
@@ -160,7 +220,6 @@ exports.getDetailedReport = async (req, res) => {
         });
     }
 };
-
 
 async function getDCReportById(dcId) {
     const reportQuery = `
@@ -190,7 +249,7 @@ async function getDCReportById(dcId) {
             (material_details.quantity)::numeric AS quantity,
             material_details.mat_id,
             material_details.unit_name,
-           material_details."noOfBags" AS no_of_bags,
+            material_details."noOfBags" AS no_of_bags,
             mat.hsn_code,
             mat.id AS material_number,
             mat.material_code,
@@ -202,7 +261,7 @@ async function getDCReportById(dcId) {
             AS material_details(id int, mat_id text, name text, quantity text, "noOfBags" text, unit_name text)
         LEFT JOIN shipping_address sa ON dc.ship_to__id = sa.id
         LEFT JOIN source_location sl ON dc.dispatch_from_id = sl.id
-        LEFT JOIN ewaybill ewb ON dc.token_no  = ewb.doc_id
+        LEFT JOIN ewaybill ewb ON (dc.token_no = ewb.doc_id OR dc.doc_no = ewb.doc_id)
         LEFT JOIN material mat ON (material_details.mat_id)::integer = mat.id
         LEFT JOIN (
             SELECT p.rr_no,
@@ -212,9 +271,8 @@ async function getDCReportById(dcId) {
                    (po_mat ->> 'mat_id') AS mat_id,
                    (po_mat ->> 'price') AS price,
                    TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
-                    TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
-                    TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date
-
+                   TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
+                   TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date
             FROM po p, jsonb_array_elements(p.materials) AS po_mat
         ) AS po_material
             ON dc.rr_no = po_material.rr_no 
@@ -228,7 +286,6 @@ async function getDCReportById(dcId) {
     const rows = await query(reportQuery, [dcId]);
     return rows;
 }
-
 
 exports.sendDataToSap = async (req, res) => {
     try {
@@ -269,7 +326,6 @@ exports.sendDataToSap = async (req, res) => {
                 const contentType = rowErr.response?.headers?.["content-type"] || "";
                 const rawData = rowErr.response?.data;
 
-                // If SAP returns HTML, extract just the first 500 chars for readability
                 const sapErrorBody = typeof rawData === "string" && rawData.trim().startsWith("<")
                     ? rawData.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 500)
                     : rawData;
@@ -288,7 +344,6 @@ exports.sendDataToSap = async (req, res) => {
         }
 
         if (rowErrors.length === dcRows.length) {
-            // ALL rows failed — don't mark as sent
             return res.status(500).json({
                 status: false,
                 message: "SAP upload failed for all rows",
@@ -296,7 +351,6 @@ exports.sendDataToSap = async (req, res) => {
             });
         }
 
-        // At least some rows succeeded — mark DC as sent
         await query(
             `UPDATE delivery_challan SET is_send_sap = true WHERE id = $1`,
             [dcId]
@@ -329,32 +383,26 @@ exports.sendDataToSap = async (req, res) => {
     }
 };
 
-
-
 exports.getSapPayload = async (req, res) => {
     try {
         const { dcId } = req.params;
 
-        console.log("dc id :", dcId)
+        console.log("dc id :", dcId);
 
         const dcRows = await getDCReportById(dcId);
-
-        console.log(dcRows)
 
         if (dcRows.length > 0) {
             for (const row of dcRows) {
                 const sapPayload = convertToSAP(row);
-
-                console.log("SAP PAYLOAD: +++++++++++++++==========> ", sapPayload)
-                res.send({ sapPayload })
+                console.log("SAP PAYLOAD: +++++++++++++++==========> ", sapPayload);
+                res.send({ sapPayload });
             }
-
         } else {
             console.log("No DC rows found for SAP upload.");
-            return res.send({ error: "Erorr" })
+            return res.send({ error: "Error" });
         }
 
     } catch (sapErr) {
         console.error("SAP Auto-Send Failed:", sapErr.response?.data || sapErr.message);
     }
-}
+};

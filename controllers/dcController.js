@@ -1916,3 +1916,46 @@ exports.cancelDC = async (req, res) => {
     }
 };
 
+
+exports.updateTruckNo = async (req, res) => {
+    const { id } = req.params;
+    const { truck_no, truckNo, vehicle_no, vehicleNo } = req.body;
+
+    const resolvedTruckNo = truck_no || truckNo || vehicle_no || vehicleNo;
+
+    if (!resolvedTruckNo) {
+        return res.status(400).json({ status: false, message: 'truck_no is required' });
+    }
+
+    try {
+        const checkResult = await query(
+            'SELECT * FROM public.delivery_challan WHERE id = $1',
+            [id]
+        );
+
+        if (checkResult.length === 0) {
+            return res.status(404).json({ status: false, message: 'Delivery challan not found' });
+        }
+
+        const result = await query(
+            `UPDATE public.delivery_challan
+             SET truck_no = $1, updated_at = CURRENT_TIMESTAMP
+             WHERE id = $2
+             RETURNING *;`,
+            [resolvedTruckNo, id]
+        );
+
+        return res.status(200).json({
+            status: true,
+            message: 'Vehicle number updated successfully',
+            data: result[0],
+        });
+    } catch (error) {
+        console.error('Error updating truck_no:', error);
+        return res.status(500).json({
+            status: false,
+            message: 'Error updating vehicle number',
+            error: error.message,
+        });
+    }
+};

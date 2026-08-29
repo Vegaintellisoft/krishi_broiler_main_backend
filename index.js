@@ -26,7 +26,8 @@ const feedDetailsRoutes = require('./routes/Breeder/feedDetailsRoutes');
 
 const app = express();
 app.set('trust proxy', true);
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(cors());
 app.set('view cache', false);
 

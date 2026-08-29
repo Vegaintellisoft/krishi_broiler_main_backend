@@ -1108,6 +1108,7 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 fa.housed,
                 fa.stock,
                 fa.mortality,
+                fa.upload_mortality,
                 fa.cum_mortality_count,
                 fa.cum_mortality_percentage,
                 fa.body_weight,
@@ -1123,7 +1124,9 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 fa.out_time,
                 fa.vehicle_no,
                 fa.start_km,
+                fa.upload_start_km,
                 fa.end_km,
+                fa.upload_end_km,
                 fa.running_km,
                 fa.total_farms,
                 fa.reason,
@@ -1271,10 +1274,81 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                              '';
             }
 
+            const serverBaseUrl = (process.env.SERVER_URL || '').replace(/\/+$/, '');
+
+            const formatPhotoArray = (rawPhotos, defaultName = 'photo.jpg') => {
+                if (typeof rawPhotos === 'string') {
+                    try {
+                        rawPhotos = JSON.parse(rawPhotos);
+                    } catch (_) {
+                        rawPhotos = rawPhotos ? [rawPhotos] : [];
+                    }
+                }
+                if (rawPhotos && !Array.isArray(rawPhotos) && typeof rawPhotos === 'object') {
+                    rawPhotos = [rawPhotos];
+                } else if (!Array.isArray(rawPhotos)) {
+                    rawPhotos = rawPhotos ? [rawPhotos] : [];
+                }
+
+                return rawPhotos.map(photo => {
+                    if (typeof photo === 'string') {
+                        if (photo.startsWith('http://') || photo.startsWith('https://') || photo.startsWith('data:')) {
+                            return { url: photo, name: photo.split('/').pop() || defaultName };
+                        }
+                        const cleanPath = photo.replace(/^\/+/, '');
+                        return {
+                            url: serverBaseUrl ? `${serverBaseUrl}/${cleanPath}` : `/${cleanPath}`,
+                            name: cleanPath.split('/').pop() || defaultName
+                        };
+                    }
+                    if (photo && typeof photo === 'object') {
+                        let photoUrl = photo.url || photo.path || photo.publicUrl || '';
+                        if (!photoUrl && photo.base64) {
+                            photoUrl = photo.base64.startsWith('data:') ? photo.base64 : `data:image/jpeg;base64,${photo.base64}`;
+                        }
+                        if (!photoUrl && photo.fileName) {
+                            photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${photo.fileName}` : `/uploads/broiler/${photo.fileName}`;
+                        }
+                        if (!photoUrl && photo.uri) {
+                            if (photo.uri.startsWith('http://') || photo.uri.startsWith('https://') || photo.uri.startsWith('data:')) {
+                                photoUrl = photo.uri;
+                            } else {
+                                const fname = photo.fileName || photo.uri.split('/').pop();
+                                if (fname) {
+                                    photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${fname}` : `/uploads/broiler/${fname}`;
+                                }
+                            }
+                        }
+                        return {
+                            ...photo,
+                            url: photoUrl,
+                            name: photo.fileName || photo.name || (photoUrl ? photoUrl.split('/').pop() : defaultName),
+                            fileSize: photo.fileSize || photo.size,
+                            width: photo.width,
+                            height: photo.height,
+                            type: photo.type || 'image/jpeg',
+                            uri: photo.uri || null,
+                            originalPath: photo.originalPath || null
+                        };
+                    }
+                    return null;
+                }).filter(Boolean);
+            };
+
+            const mortalityPhotos = formatPhotoArray(entry.upload_mortality, 'mortality_photo.jpg');
+            const startKmPhotos = formatPhotoArray(entry.upload_start_km, 'start_km_photo.jpg');
+            const endKmPhotos = formatPhotoArray(entry.upload_end_km, 'end_km_photo.jpg');
+
             return {
                 ...entry,
                 user_display_name: fullname || entry.user_id || 'unknown',
-                farmer_name: farmerName
+                farmer_name: farmerName,
+                photos: mortalityPhotos,
+                photo_url: mortalityPhotos.length > 0 ? mortalityPhotos[0].url : null,
+                start_km_photos: startKmPhotos,
+                start_km_photo_url: startKmPhotos.length > 0 ? startKmPhotos[0].url : null,
+                end_km_photos: endKmPhotos,
+                end_km_photo_url: endKmPhotos.length > 0 ? endKmPhotos[0].url : null,
             };
         });
 
@@ -1291,6 +1365,56 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
             total_feed_bags: entries.reduce((sum, e) => sum + (Number(e.quantity_bags) || 0), 0),
         };
 
+        const serverBaseUrl = (process.env.SERVER_URL || '').replace(/\/+$/, '');
+        const formatPhotoArrayTrip = (rawPhotos, defaultName = 'photo.jpg') => {
+            if (typeof rawPhotos === 'string') {
+                try { rawPhotos = JSON.parse(rawPhotos); } catch (_) { rawPhotos = rawPhotos ? [rawPhotos] : []; }
+            }
+            if (rawPhotos && !Array.isArray(rawPhotos) && typeof rawPhotos === 'object') rawPhotos = [rawPhotos];
+            else if (!Array.isArray(rawPhotos)) rawPhotos = rawPhotos ? [rawPhotos] : [];
+
+            return rawPhotos.map(photo => {
+                if (typeof photo === 'string') {
+                    if (photo.startsWith('http://') || photo.startsWith('https://') || photo.startsWith('data:')) {
+                        return { url: photo, name: photo.split('/').pop() || defaultName };
+                    }
+                    const cleanPath = photo.replace(/^\/+/, '');
+                    return { url: serverBaseUrl ? `${serverBaseUrl}/${cleanPath}` : `/${cleanPath}`, name: cleanPath.split('/').pop() || defaultName };
+                }
+                if (photo && typeof photo === 'object') {
+                    let photoUrl = photo.url || photo.path || photo.publicUrl || '';
+                    if (!photoUrl && photo.base64) photoUrl = photo.base64.startsWith('data:') ? photo.base64 : `data:image/jpeg;base64,${photo.base64}`;
+                    if (!photoUrl && photo.fileName) photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${photo.fileName}` : `/uploads/broiler/${photo.fileName}`;
+                    if (!photoUrl && photo.uri) {
+                        if (photo.uri.startsWith('http://') || photo.uri.startsWith('https://') || photo.uri.startsWith('data:')) photoUrl = photo.uri;
+                        else {
+                            const fname = photo.fileName || photo.uri.split('/').pop();
+                            if (fname) photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${fname}` : `/uploads/broiler/${fname}`;
+                        }
+                    }
+                    return { ...photo, url: photoUrl, name: photo.fileName || photo.name || defaultName, fileSize: photo.fileSize || photo.size, width: photo.width, height: photo.height, type: photo.type || 'image/jpeg' };
+                }
+                return null;
+            }).filter(Boolean);
+        };
+
+        const firstWithKm = entries.find(e => e.start_km || e.end_km || e.vehicle_no || e.upload_start_km || e.upload_end_km) || entries[0] || {};
+        const tripStartPhotos = formatPhotoArrayTrip(firstWithKm.upload_start_km, 'start_km_photo.jpg');
+        const tripEndPhotos = formatPhotoArrayTrip(firstWithKm.upload_end_km, 'end_km_photo.jpg');
+
+        const tripInfo = {
+            vehicle_no: firstWithKm.vehicle_no || '-',
+            start_km: firstWithKm.start_km || null,
+            end_km: firstWithKm.end_km || null,
+            running_km: firstWithKm.running_km || (firstWithKm.start_km && firstWithKm.end_km ? (Number(firstWithKm.end_km) - Number(firstWithKm.start_km)).toFixed(2) : null),
+            start_km_photos: tripStartPhotos,
+            start_km_photo_url: tripStartPhotos.length > 0 ? tripStartPhotos[0].url : null,
+            end_km_photos: tripEndPhotos,
+            end_km_photo_url: tripEndPhotos.length > 0 ? tripEndPhotos[0].url : null,
+            in_time: firstWithKm.in_time || null,
+            out_time: firstWithKm.out_time || null,
+        };
+
         res.status(200).json({
             status: true,
             data: {
@@ -1298,6 +1422,7 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 plant_name: plantName,
                 date,
                 summary: summaryStats,
+                trip: tripInfo,
                 entries: enrichedEntries
             }
         });

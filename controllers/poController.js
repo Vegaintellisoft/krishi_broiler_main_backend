@@ -1,3 +1,7 @@
+﻿const path = require("path");
+const fs = require("fs");
+const puppeteer = require("puppeteer");
+const { getChromiumPath } = require("../services/helper");
 const { query } = require("../config/db");
 
 function parseDateForDb(val) {
@@ -125,11 +129,13 @@ exports.updatePO = async (req, res) => {
             });
         }
 
-        const cleanPoDate = parseDateForDb(po_date);
-        const cleanRrDate = parseDateForDb(rr_date);
-        const cleanInvoiceDate = parseDateForDb(supplier_invoice_date);
-        const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : 1;
-        const cleanSupplierId = parseInt(supplier__id, 10);
+        const existingPO = poCheckResult[0];
+
+        const cleanPoDate = po_date !== undefined ? parseDateForDb(po_date) : existingPO.po_date;
+        const cleanRrDate = rr_date !== undefined ? parseDateForDb(rr_date) : existingPO.rr_date;
+        const cleanInvoiceDate = supplier_invoice_date !== undefined ? parseDateForDb(supplier_invoice_date) : existingPO.supplier_invoice_date;
+        const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : existingPO.status;
+        const cleanSupplierId = supplier__id !== undefined ? parseInt(supplier__id, 10) : existingPO.supplier__id;
 
         const queryText = `
             UPDATE PO 
@@ -144,9 +150,9 @@ exports.updatePO = async (req, res) => {
         const values = [
             String(po_no).trim(),
             cleanSupplierId,
-            bill_no ? String(bill_no).trim() : null,
-            rr_no ? String(rr_no).trim() : null,
-            JSON.stringify(materials),
+            bill_no !== undefined ? (bill_no ? String(bill_no).trim() : null) : existingPO.bill_no,
+            rr_no !== undefined ? (rr_no ? String(rr_no).trim() : null) : existingPO.rr_no,
+            materials !== undefined ? JSON.stringify(materials) : existingPO.materials,
             cleanStatus,
             cleanPoDate,
             cleanRrDate,
@@ -228,5 +234,64 @@ exports.deletePO = async (req, res) => {
     } catch (error) {
         console.log(error);
         res.status(500).json({ status: false, message: "Error while deleting po", error: error });
+    }
+};
+
+exports.generatePOPDF = async (req, res) => {
+    try {
+        const { poData, htmlContent } = req.body;
+        if (!htmlContent) {
+            return res.status(400).json({ status: false, message: "htmlContent is required" });
+        }
+
+        const reportsDir = path.join(process.cwd(), 'challans');
+        if (!fs.existsSync(reportsDir)) {
+            fs.mkdirSync(reportsDir, { recursive: true });
+        }
+
+        const safePoNo = String(poData?.po_no || 'PO').replace(/[\/\\?%*:|"<>]/g, '-');
+        const fileName = `PO_${safePoNo}_${Date.now()}.pdf`;
+        const filePath = path.join(reportsDir, fileName);
+        const serverBaseUrl = process.env.SERVER_URL || `http://${req.headers.host}`;
+        const pdfUrl = `${serverBaseUrl}/challans/${fileName}`;
+
+        const browser = await puppeteer.launch({
+            headless: 'new',
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-gpu'
+            ],
+            executablePath: getChromiumPath(),
+        });
+
+        const page = await browser.newPage();
+        await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 25000 });
+        await page.pdf({
+            path: filePath,
+            format: 'A4',
+            printBackground: true,
+            margin: { top: '30px', bottom: '30px', left: '30px', right: '30px' },
+        });
+        await browser.close();
+
+        return res.status(200).json({
+            status: true,
+            message: 'PO PDF generated successfully',
+            pdfLink: pdfUrl,
+            fileName: fileName
+        });
+    } catch (error) {
+        console.error('Error generating PO PDF:', error);
+        return res.status(500).json({
+            status: false,
+            message: 'Error generating PO PDF',
+            error: error.message
+        });
     }
 };
