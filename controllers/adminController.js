@@ -944,20 +944,30 @@ exports.getBroilerDashboardReport = async (req, res) => {
             groupingSql = "TO_CHAR(fa.date::date, 'YYYY-MM-DD') AS period_date";
         }
 
+        const { reason } = req.query;
+        let reasonFilterSql = '';
+        let reportQueryParams = [fromDate, toDate];
+        if (reason && reason !== '__ALL__' && String(reason).trim()) {
+            reportQueryParams.push(`%${String(reason).trim().toLowerCase()}%`);
+            reasonFilterSql = `AND LOWER(COALESCE(fa.reason, '')) LIKE $${reportQueryParams.length}`;
+        }
+
         const reportDetailsQuery = `
             SELECT 
                 ${groupingSql},
                 fa.plant,
                 COUNT(*)::int AS posted,
                 COUNT(DISTINCT fa.user_id)::int AS user_count,
-                STRING_AGG(DISTINCT COALESCE(fa.user_id, 'unknown'), ', ') AS usernames
+                STRING_AGG(DISTINCT COALESCE(fa.user_id, 'unknown'), ', ') AS usernames,
+                SUM(COALESCE(fa.mortality::numeric, 0))::int AS total_mortality,
+                STRING_AGG(DISTINCT NULLIF(TRIM(fa.reason), ''), ', ') AS mortality_reasons
             FROM broiler.farm_activity fa
-            WHERE fa.date::date BETWEEN $1::date AND $2::date
+            WHERE fa.date::date BETWEEN $1::date AND $2::date ${reasonFilterSql}
             GROUP BY period_date, fa.plant
             ORDER BY period_date DESC, fa.plant ASC;
         `;
 
-        const reportDetails = await query(reportDetailsQuery, [fromDate, toDate]);
+        const reportDetails = await query(reportDetailsQuery, reportQueryParams);
 
         // Summary Metrics from farm_activity only
         const [totalEntriesResult] = await query(
@@ -1051,6 +1061,7 @@ exports.getBroilerDashboardReport = async (req, res) => {
                 summary,
                 reportDetails: enrichedReportDetails,
                 loginDetails,
+                available_mortality_reasons: (await query(`SELECT DISTINCT NULLIF(TRIM(reason), '') AS reason FROM broiler.farm_activity WHERE date::date BETWEEN $1::date AND $2::date AND reason IS NOT NULL AND TRIM(reason) != '' ORDER BY reason ASC`, [fromDate, toDate])).map(r => r.reason).filter(Boolean),
                 fromDate,
                 toDate,
                 period
@@ -1097,6 +1108,14 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
             dateCondition = "TO_CHAR(fa.date::date, 'YYYY-MM-DD') = $1";
         }
 
+        const { reason: farmReason } = req.query;
+        let farmReasonFilterSql = '';
+        let farmQueryParams = [date, String(plant)];
+        if (farmReason && farmReason !== '__ALL__' && String(farmReason).trim()) {
+            farmQueryParams.push(`%${String(farmReason).trim().toLowerCase()}%`);
+            farmReasonFilterSql = `AND LOWER(COALESCE(fa.reason, '')) LIKE $${farmQueryParams.length}`;
+        }
+
         const entries = await query(`
             SELECT 
                 fa.id,
@@ -1130,15 +1149,16 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 fa.running_km,
                 fa.total_farms,
                 fa.reason,
+                fa.reason AS mortality_reason,
                 fa.treatment,
                 fa.user_id,
                 fa.sap_status,
                 fa.created_at,
                 fa.materials
             FROM broiler.farm_activity fa
-            WHERE ${dateCondition} AND fa.plant::text = $2::text
+            WHERE ${dateCondition} AND fa.plant::text = $2::text ${farmReasonFilterSql}
             ORDER BY fa.farmer ASC, fa.created_at DESC
-        `, [date, String(plant)]);
+        `, farmQueryParams);
         console.log('[BroilerFarmActivity] Found entries:', entries.length);
         // Build user mapping for display names
         const drivers = await query("SELECT username, fullname FROM public.driver");
