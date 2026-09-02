@@ -815,106 +815,154 @@ exports.submit = async (req, res) => {
         const sap_format_date = format(postDateSource, 'dd-MM-yyyy');
         console.log(`[BOS Submit] doc_no=${doc_no} | sap_post_date input=${sap_post_date} | formatted=${sap_format_date} | rate from DB=${dbRate}`);
 
-        // --- Lookup employee names for order_by / dispatch_by ---
-        // 1. Direct extraction from "Code - Name" string if present
-        let order_by_name = rest.order_by_name || extractNameOnly(rest.order_by) || '';
-        let dispatch_by_name = rest.dispatch_by_name || extractNameOnly(rest.dispatch_by) || '';
+/**
+ * Resolves full names for a list of employee / user identifiers (username, emp_id, or id)
+ * by querying public.driver and broiler.employee.
+ */
+const resolveEmployeeFullNames = async (codes = []) => {
+    const rawCodes = codes.map(c => extractCodeOnly(c)).filter(Boolean);
+    if (rawCodes.length === 0) return {};
 
+    const allCodes = [
+        ...rawCodes,
+        ...rawCodes.map(c => c.replace(/^0+/, '')),
+        ...rawCodes.map(c => c.padStart(8, '0'))
+    ];
+    const uniqueCodes = [...new Set(allCodes.filter(Boolean))];
+    const nameMap = {};
+
+    try {
+        // 1. Query public.driver (username -> fullname, id -> fullname, emp_id -> fullname)
+        const driverRows = await query(
+            `SELECT id, username, fullname, emp_id FROM public.driver
+             WHERE lower(username) = ANY($1::text[])
+                OR lower(fullname) = ANY($1::text[])
+                OR id::text = ANY($2::text[])
+                OR emp_id = ANY($2::text[])`,
+            [uniqueCodes.map(c => c.toLowerCase()), uniqueCodes]
+        );
+        driverRows.forEach(d => {
+            const fn = String(d.fullname || '').trim();
+            if (!fn) return;
+            if (d.username) {
+                const u = String(d.username).trim().toLowerCase();
+                nameMap[u] = fn;
+            }
+            if (d.id) {
+                const id = String(d.id).trim().toLowerCase();
+                nameMap[id] = fn;
+            }
+            if (d.emp_id) {
+                const eid = String(d.emp_id).trim().toLowerCase();
+                nameMap[eid] = fn;
+                nameMap[eid.replace(/^0+/, '')] = fn;
+                nameMap[eid.padStart(8, '0')] = fn;
+            }
+        });
+    } catch (dErr) {
+        console.warn('Driver table lookup warning:', dErr.message);
+    }
+
+    try {
+        // 2. Query broiler.employee (emp_id -> emp_name)
+        const empRows = await query(
+            `SELECT emp_id, emp_name FROM broiler.employee
+             WHERE emp_id = ANY($1::text[]) OR lower(emp_name) = ANY($2::text[])`,
+            [uniqueCodes, uniqueCodes.map(c => c.toLowerCase())]
+        );
+        empRows.forEach(e => {
+            const id = String(e.emp_id || '').trim();
+            const name = String(e.emp_name || '').trim();
+            if (id && name) {
+                const idLower = id.toLowerCase();
+                if (!nameMap[idLower]) nameMap[idLower] = name;
+                if (!nameMap[idLower.replace(/^0+/, '')]) nameMap[idLower.replace(/^0+/, '')] = name;
+                if (!nameMap[idLower.padStart(8, '0')]) nameMap[idLower.padStart(8, '0')] = name;
+            }
+            if (name && !nameMap[name.toLowerCase()]) {
+                nameMap[name.toLowerCase()] = name;
+            }
+        });
+    } catch (eErr) {
+        console.warn('Employee table lookup warning:', eErr.message);
+    }
+
+    return nameMap;
+};
+
+        // --- Lookup employee names for order_by / dispatch_by ---
         const orderByCleanCode    = extractCodeOnly(rest.order_by);
         const dispatchByCleanCode = extractCodeOnly(rest.dispatch_by);
 
-        // 2. If name is still missing, lookup in DB / SAP
+        // 1. Direct extraction from "Code - Name" string if present
+        let order_by_name    = extractNameOnly(rest.order_by);
+        let dispatch_by_name = extractNameOnly(rest.dispatch_by);
+
+        // If rest already has a custom name that is NOT just the code/username
+        if (!order_by_name && rest.order_by_name && rest.order_by_name.trim().toLowerCase() !== orderByCleanCode.trim().toLowerCase()) {
+            order_by_name = rest.order_by_name.trim();
+        }
+        if (!dispatch_by_name && rest.dispatch_by_name && rest.dispatch_by_name.trim().toLowerCase() !== dispatchByCleanCode.trim().toLowerCase()) {
+            dispatch_by_name = rest.dispatch_by_name.trim();
+        }
+
+        // 2. Lookup full names from public.driver and broiler.employee
         if (!order_by_name || !dispatch_by_name) {
             try {
-                const rawCodes = [orderByCleanCode, dispatchByCleanCode].filter(Boolean);
-                if (rawCodes.length > 0) {
-                    const allCodes = [
-                        ...rawCodes,
-                        ...rawCodes.map(c => c.replace(/^0+/, '')),
-                        ...rawCodes.map(c => c.padStart(8, '0'))
-                    ];
-                    const uniqueCodes = [...new Set(allCodes.filter(Boolean))];
+                const resolvedNames = await resolveEmployeeFullNames([orderByCleanCode, dispatchByCleanCode]);
+                const getName = (code) => {
+                    if (!code) return '';
+                    const c = String(code).trim().toLowerCase();
+                    return resolvedNames[c]
+                        || resolvedNames[c.replace(/^0+/, '')]
+                        || resolvedNames[c.padStart(8, '0')]
+                        || '';
+                };
 
-                    // Try matching by emp_id first, then by emp_name (username fallback)
-                    const empRows = await query(
-                        `SELECT emp_id, emp_name FROM broiler.employee
-                         WHERE emp_id = ANY($1::text[]) OR lower(emp_name) = ANY($2::text[])`,
-                        [uniqueCodes, uniqueCodes.map(c => c.toLowerCase())]
-                    );
-                    const empByIdMap = {};
-                    const empByNameMap = {};
-                    empRows.forEach(e => {
-                        const id = String(e.emp_id || '').trim();
-                        const name = String(e.emp_name || '').trim();
-                        if (id) {
-                            empByIdMap[id.toLowerCase()] = name;
-                            empByIdMap[id.replace(/^0+/, '').toLowerCase()] = name;
-                            empByIdMap[id.padStart(8, '0').toLowerCase()] = name;
-                        }
-                        if (name) empByNameMap[name.toLowerCase()] = name;
-                    });
-                    const resolveEmpName = (code) => {
-                        if (!code) return '';
-                        const c = String(code).trim().toLowerCase();
-                        return empByIdMap[c]
-                            || empByIdMap[c.replace(/^0+/, '')]
-                            || empByIdMap[c.padStart(8, '0')]
-                            || empByNameMap[c]
-                            || '';
-                    };
+                if (!order_by_name && orderByCleanCode)       order_by_name    = getName(orderByCleanCode);
+                if (!dispatch_by_name && dispatchByCleanCode) dispatch_by_name = getName(dispatchByCleanCode);
 
-                    if (!order_by_name)    order_by_name    = resolveEmpName(orderByCleanCode);
-                    if (!dispatch_by_name) dispatch_by_name = resolveEmpName(dispatchByCleanCode);
-
-                    // 3. Fallback: plant default employee codes from sales_emp_default
-                    if ((!order_by_name || !dispatch_by_name) && rest.plant) {
-                        try {
-                            const empDefRows = await query(
-                                `SELECT ordered_by, dispatched_by FROM broiler.sales_emp_default WHERE plant = $1 LIMIT 1`,
-                                [String(rest.plant)]
-                            );
-                            if (empDefRows.length > 0) {
-                                const defOrderCode    = extractCodeOnly(empDefRows[0].ordered_by);
-                                const defDispatchCode = extractCodeOnly(empDefRows[0].dispatched_by);
-                                const defCodes = [...new Set([defOrderCode, defDispatchCode].filter(Boolean))];
-                                if (defCodes.length > 0) {
-                                    const defEmpRows = await query(
-                                        `SELECT emp_id, emp_name FROM broiler.employee WHERE emp_id = ANY($1::text[])`,
-                                        [defCodes]
-                                    );
-                                    const defEmpMap = {};
-                                    defEmpRows.forEach(e => {
-                                        const id = String(e.emp_id || '').trim();
-                                        const name = String(e.emp_name || '').trim();
-                                        defEmpMap[id] = name;
-                                        defEmpMap[id.replace(/^0+/, '')] = name;
-                                    });
-                                    if (!order_by_name && defOrderCode) {
-                                        order_by_name = defEmpMap[defOrderCode] || defEmpMap[defOrderCode.replace(/^0+/, '')] || extractNameOnly(empDefRows[0].ordered_by) || '';
-                                    }
-                                    if (!dispatch_by_name && defDispatchCode) {
-                                        dispatch_by_name = defEmpMap[defDispatchCode] || defEmpMap[defDispatchCode.replace(/^0+/, '')] || extractNameOnly(empDefRows[0].dispatched_by) || '';
-                                    }
-                                }
+                // 3. Fallback: plant default employee codes from sales_emp_default
+                if ((!order_by_name || !dispatch_by_name) && rest.plant) {
+                    try {
+                        const empDefRows = await query(
+                            `SELECT ordered_by, dispatched_by FROM broiler.sales_emp_default WHERE plant = $1 LIMIT 1`,
+                            [String(rest.plant)]
+                        );
+                        if (empDefRows.length > 0) {
+                            const defOrderCode    = extractCodeOnly(empDefRows[0].ordered_by);
+                            const defDispatchCode = extractCodeOnly(empDefRows[0].dispatched_by);
+                            const defNames = await resolveEmployeeFullNames([defOrderCode, defDispatchCode]);
+                            if (!order_by_name && defOrderCode) {
+                                order_by_name = defNames[defOrderCode.toLowerCase()]
+                                    || defNames[defOrderCode.replace(/^0+/, '').toLowerCase()]
+                                    || extractNameOnly(empDefRows[0].ordered_by)
+                                    || '';
                             }
-                        } catch (defErr) {
-                            console.warn('sales_emp_default fallback lookup failed:', defErr.message);
+                            if (!dispatch_by_name && defDispatchCode) {
+                                dispatch_by_name = defNames[defDispatchCode.toLowerCase()]
+                                    || defNames[defDispatchCode.replace(/^0+/, '').toLowerCase()]
+                                    || extractNameOnly(empDefRows[0].dispatched_by)
+                                    || '';
+                            }
                         }
+                    } catch (defErr) {
+                        console.warn('sales_emp_default fallback lookup failed:', defErr.message);
                     }
+                }
 
-                    // 4. Fallback: Lookup directly from SAP /emp_master endpoint
-                    if (!order_by_name || !dispatch_by_name) {
-                        try {
-                            const sapEmpMap = await fetchSapEmployeeInfo();
-                            if (!order_by_name && orderByCleanCode) {
-                                order_by_name = sapEmpMap[orderByCleanCode] || sapEmpMap[orderByCleanCode.replace(/^0+/, '')] || '';
-                            }
-                            if (!dispatch_by_name && dispatchByCleanCode) {
-                                dispatch_by_name = sapEmpMap[dispatchByCleanCode] || sapEmpMap[dispatchByCleanCode.replace(/^0+/, '')] || '';
-                            }
-                        } catch (sapEmpErr) {
-                            console.warn('SAP emp_master lookup failed:', sapEmpErr.message);
+                // 4. Fallback: Lookup directly from SAP /emp_master endpoint
+                if (!order_by_name || !dispatch_by_name) {
+                    try {
+                        const sapEmpMap = await fetchSapEmployeeInfo();
+                        if (!order_by_name && orderByCleanCode) {
+                            order_by_name = sapEmpMap[orderByCleanCode] || sapEmpMap[orderByCleanCode.replace(/^0+/, '')] || '';
                         }
+                        if (!dispatch_by_name && dispatchByCleanCode) {
+                            dispatch_by_name = sapEmpMap[dispatchByCleanCode] || sapEmpMap[dispatchByCleanCode.replace(/^0+/, '')] || '';
+                        }
+                    } catch (sapEmpErr) {
+                        console.warn('SAP emp_master lookup failed:', sapEmpErr.message);
                     }
                 }
             } catch (empErr) {
@@ -1259,6 +1307,27 @@ exports.getAll = async (req, res) => {
             console.warn('Could not fetch plant names from DB:', e.message);
         }
 
+        // 4. Fetch user/driver/employee full names from DB
+        let userFullnameMap = {};
+        try {
+            const driverUsers = await query(`SELECT username, fullname, emp_id, id FROM public.driver`);
+            driverUsers.forEach(d => {
+                const fn = String(d.fullname || '').trim();
+                if (!fn) return;
+                if (d.username) userFullnameMap[String(d.username).trim().toLowerCase()] = fn;
+                if (d.id) userFullnameMap[String(d.id).trim().toLowerCase()] = fn;
+                if (d.emp_id) userFullnameMap[String(d.emp_id).trim().toLowerCase()] = fn;
+            });
+            const empList = await query(`SELECT emp_id, emp_name FROM broiler.employee`);
+            empList.forEach(e => {
+                const en = String(e.emp_name || '').trim();
+                if (!en) return;
+                if (e.emp_id) userFullnameMap[String(e.emp_id).trim().toLowerCase()] = en;
+            });
+        } catch (e) {
+            console.warn('Could not fetch driver/employee names from DB:', e.message);
+        }
+
         // ------------------------------------------------------------------
         // Enrich each record
         // ------------------------------------------------------------------
@@ -1313,14 +1382,21 @@ exports.getAll = async (req, res) => {
             console.log(`[getAll] doc_no=${row.doc_no} | customer=${row.customer} | customer_name resolved="${customer_name}" | farmer=${row.farmer} | farmer_name resolved="${farmer_name}"`);
 
             // Resolve order_by and dispatch_by names
+            const cleanOrderBy = extractCodeOnly(row.order_by || raw.order_by);
+            const cleanDispBy = extractCodeOnly(row.dispatch_by || raw.dispatch_by);
+
             const order_by_name =
-                raw.order_by_name ||
                 extractNameOnly(row.order_by || raw.order_by) ||
+                (raw.order_by_name && raw.order_by_name.trim().toLowerCase() !== cleanOrderBy.toLowerCase() ? raw.order_by_name : null) ||
+                (cleanOrderBy ? userFullnameMap[cleanOrderBy.toLowerCase()] : null) ||
+                cleanOrderBy ||
                 null;
 
             const dispatch_by_name =
-                raw.dispatch_by_name ||
                 extractNameOnly(row.dispatch_by || raw.dispatch_by) ||
+                (raw.dispatch_by_name && raw.dispatch_by_name.trim().toLowerCase() !== cleanDispBy.toLowerCase() ? raw.dispatch_by_name : null) ||
+                (cleanDispBy ? userFullnameMap[cleanDispBy.toLowerCase()] : null) ||
+                cleanDispBy ||
                 null;
 
             return {
