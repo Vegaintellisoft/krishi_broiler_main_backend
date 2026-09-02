@@ -3,13 +3,25 @@ const path = require('path');
 const fs = require('fs');
 const qs = require("qs");
 const ejs = require('ejs');
+const QRCode = require('qrcode');
+
+const generateEwayQrDataUri = async (ewayData) => {
+    if (!ewayData || !ewayData.e_way_bill_no) return '';
+    try {
+        const qrText = `${ewayData.e_way_bill_no} | ${ewayData.date || ''} | ${ewayData.valid || ''}`;
+        return await QRCode.toDataURL(qrText, { width: 150, margin: 1 });
+    } catch (err) {
+        console.error('Error generating e-way QR code:', err);
+        return '';
+    }
+};
 const { format, startOfWeek, endOfWeek } = require('date-fns');
 const { query } = require("../config/db");
 const { fetchEWayBillNumber, cancelEway } = require("../services/ewayBillGeneration");
 const { getStateCodeByName } = require("../services/getStateCode");
 const { convertToSAP } = require('../services/sapConvert');
 const { default: axios } = require('axios');
-const { getChromiumPath } = require('../services/helper');
+const { getChromiumPath, getKrishiLogoDataUri } = require('../services/helper');
 const { asset, runtime } = require('../utils/paths');
 
 // ---------------- SAP CONFIG -----------------
@@ -1025,7 +1037,7 @@ exports.addDC = async (req, res) => {
             const formatDateTime = (date) => {
                 if (!date) return '';
                 const pad = num => num.toString().padStart(2, '0');
-                return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+                return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ` +
                     `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
             };
 
@@ -1036,6 +1048,9 @@ exports.addDC = async (req, res) => {
                 valid: ewayRes[0]?.ewb_valid_till ? formatDateTime(new Date(ewayRes[0].ewb_valid_till)) : '',
                 transaction_type: 'regular'
             };
+
+            const qr_code_data_uri = await generateEwayQrDataUri(e_way_data);
+            e_way_data.qr_code_data_uri = qr_code_data_uri;
 
             const templateData = {
                 rr_no: rr_no,
@@ -1052,9 +1067,10 @@ exports.addDC = async (req, res) => {
                 updated_at: dcData.updated_at,
                 status: 'Active',
                 e_way_data,
+                qr_code_data_uri,
                 isEwayBill,
                 isEwayExemption,
-                viewMode: false
+                viewMode: false, logo_data_uri: getKrishiLogoDataUri()
             };
 
             const htmlTemplatePath = asset('templates', 'dc-challan.ejs');
@@ -1629,7 +1645,7 @@ exports.generateChallanPDFByViewData = async (req, res) => {
 
         function formatDateTime(date) {
             const pad = num => num.toString().padStart(2, '0');
-            return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+            return `${pad(date.getDate())}-${pad(date.getMonth() + 1)}-${date.getFullYear()} ` +
                 `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
         }
 
@@ -1643,6 +1659,9 @@ exports.generateChallanPDFByViewData = async (req, res) => {
             valid: formatDateTime(new Date(ewayRes[0]?.ewb_valid_till)),
             transaction_type: 'regular'
         };
+
+        const qr_code_data_uri = await generateEwayQrDataUri(e_way_data);
+        e_way_data.qr_code_data_uri = qr_code_data_uri;
 
         // console.log(e_way_data)
 
@@ -1664,9 +1683,10 @@ exports.generateChallanPDFByViewData = async (req, res) => {
             updated_at: dcData.updated_at,
             status: dcData.status === 1 ? 'Active' : 'Cancelled',
             e_way_data,
+            qr_code_data_uri,
             isEwayBill,
             isEwayExemption,
-            viewMode: false
+            viewMode: false, logo_data_uri: getKrishiLogoDataUri()
         };
 
         // console.log(templateData)
@@ -1959,3 +1979,5 @@ exports.updateTruckNo = async (req, res) => {
         });
     }
 };
+
+

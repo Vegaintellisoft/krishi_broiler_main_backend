@@ -9,7 +9,9 @@ function getKrishiLogoDataUri() {
     if (cachedLogoDataUri) return cachedLogoDataUri;
     try {
         const candidatePaths = [
+            path.join(__dirname, '..', 'assets', 'images', 'krishi.png'),
             path.join(__dirname, '..', 'assets', 'images', 'krishi-logo.png'),
+            path.join(__dirname, '..', '..', 'admin', 'public', 'assets', 'krishi.png'),
             path.join(__dirname, '..', '..', 'admin', 'public', 'krishi-logo.png'),
             path.join(__dirname, '..', 'public', 'krishi-logo.png'),
         ];
@@ -77,3 +79,4 @@ function getChromiumPath() {
 }
 
 module.exports = { getChromiumPath, getKrishiLogoDataUri };
+

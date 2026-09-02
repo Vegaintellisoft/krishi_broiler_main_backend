@@ -31,6 +31,44 @@ const extractCodeOnly = (val) => {
     return str.includes(' - ') ? str.split(' - ')[0].trim() : str;
 };
 
+// Extracts just the Name from "Code - Name" format strings.
+// e.g. "00011248 - TAMILVANAN.R" → "TAMILVANAN.R"
+const extractNameOnly = (val) => {
+    if (!val) return '';
+    const str = String(val).trim();
+    return str.includes(' - ') ? str.split(' - ').slice(1).join(' - ').trim() : '';
+};
+
+/**
+ * Fetch employee info from SAP /emp_master endpoint.
+ * Returns map of { [emp_id]: emp_name }
+ */
+const fetchSapEmployeeInfo = async () => {
+    const empMap = {};
+    try {
+        const empUrl = `${process.env.BROILER_SAP_BASE_URL}/emp_master?sap-client=500`;
+        const empRes = await axios.get(empUrl, {
+            auth: { username: process.env.BROILER_SAP_USERNAME, password: process.env.BROILER_SAP_PASSWORD },
+            timeout: 8000
+        });
+        if (empRes.status === 200 && Array.isArray(empRes.data)) {
+            empRes.data.forEach(item => {
+                const id = String(item.pernr || item.Pernr || item.emp_id || '').trim();
+                const name = String(item.sname || item.Sname || item.emp_name || '').trim();
+                if (id && name) {
+                    empMap[id] = name;
+                    empMap[id.replace(/^0+/, '')] = name;
+                    empMap[id.padStart(8, '0')] = name;
+                }
+            });
+            console.log(`fetchSapEmployeeInfo: Loaded ${Object.keys(empMap).length} employee entries from SAP.`);
+        }
+    } catch (e) {
+        console.warn('fetchSapEmployeeInfo SAP lookup failed:', e.message);
+    }
+    return empMap;
+};
+
 /**
  * Fetch farmer + customer contact info from SAP /customer & /daily_mor endpoints.
  * Returns { farmerPhone, farmerName, farmerPlace, customerPhone, customerName }
@@ -189,11 +227,11 @@ const formatBillOfSupplyDataToSap = (data) => {
         // bird_stock comes from data top-level (set by mobile or admin) — support all key variants
         bird_stock:     Number(data.bird_stock ?? data.birdStock ?? data.stock ?? 0),
         // Employee names for order_by / dispatch_by & Farmer Name (looked up before calling this function)
-        order_by_name:    data.order_by_name    || '',
-        dispatch_by_name: data.dispatch_by_name || '',
-        farmer_name:      data.farmer_name      || '',
-        customer_name:    data.customer_name    || '',
-        line_no_name:     data.line_no_name     || '',
+        order_by_name:    data.order_by_name    || extractNameOnly(data.order_by)    || '',
+        dispatch_by_name: data.dispatch_by_name || extractNameOnly(data.dispatch_by) || '',
+        farmer_name:      data.farmer_name      || extractNameOnly(data.farmer)      || '',
+        customer_name:    data.customer_name    || extractNameOnly(data.customer)    || '',
+        line_no_name:     data.line_no_name     || extractNameOnly(data.line_no)     || '',
     };
 
     const mappedRow = {};
@@ -483,7 +521,7 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
         try {
             const parsedSapPostDate = new Date(sap_post_date);
             if (!isNaN(parsedSapPostDate.getTime())) {
-                formattedSapPostDate = format(parsedSapPostDate, 'dd.MM.yyyy');
+                formattedSapPostDate = format(parsedSapPostDate, 'dd-MM-yyyy');
             }
         } catch (e) {
             console.warn("Error formatting SAP Post Date for PDF:", e.message);
@@ -492,7 +530,7 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
 
     const { net_weight, gross_value, bill_value, average_weight } = computeTotals(load_details);
 
-    const formattedDate = format(new Date(data.date), 'yyyy-MM-dd');
+    const formattedDate = format(new Date(data.date), 'dd-MM-yyyy');
 
     const templateData = {
         ...data,
@@ -778,69 +816,110 @@ exports.submit = async (req, res) => {
         console.log(`[BOS Submit] doc_no=${doc_no} | sap_post_date input=${sap_post_date} | formatted=${sap_format_date} | rate from DB=${dbRate}`);
 
         // --- Lookup employee names for order_by / dispatch_by ---
-        // raw_data stores only the code (e.g. "E000564" or username like "VEGA").
-        // SAP needs both code and name. Query broiler.employee to resolve names.
-        let order_by_name = '';
-        let dispatch_by_name = '';
-        try {
-            const orderByCode    = rest.order_by    || '';
-            const dispatchByCode = rest.dispatch_by || '';
-            const codes = [...new Set([orderByCode, dispatchByCode].filter(Boolean))];
-            if (codes.length > 0) {
-                // Try matching by emp_id first, then by emp_name (username fallback)
-                const empRows = await query(
-                    `SELECT emp_id, emp_name FROM broiler.employee
-                     WHERE emp_id = ANY($1::text[]) OR lower(emp_name) = ANY($2::text[])`,
-                    [codes, codes.map(c => c.toLowerCase())]
-                );
-                const empByIdMap = {};
-                const empByNameMap = {};
-                empRows.forEach(e => {
-                    if (e.emp_id)   empByIdMap[e.emp_id.toLowerCase()]   = e.emp_name || '';
-                    if (e.emp_name) empByNameMap[e.emp_name.toLowerCase()] = e.emp_name || '';
-                });
-                const resolveName = (code) => {
-                    if (!code) return '';
-                    return empByIdMap[code.toLowerCase()]
-                        || empByNameMap[code.toLowerCase()]
-                        || '';
-                };
-                order_by_name    = resolveName(orderByCode);
-                dispatch_by_name = resolveName(dispatchByCode);
+        // 1. Direct extraction from "Code - Name" string if present
+        let order_by_name = rest.order_by_name || extractNameOnly(rest.order_by) || '';
+        let dispatch_by_name = rest.dispatch_by_name || extractNameOnly(rest.dispatch_by) || '';
 
-                // If still empty, try to get the default emp codes from sales_emp_default for this plant
-                if ((!order_by_name || !dispatch_by_name) && rest.plant) {
-                    try {
-                        const empDefRows = await query(
-                            `SELECT ordered_by, dispatched_by FROM broiler.sales_emp_default WHERE plant = $1 LIMIT 1`,
-                            [String(rest.plant)]
-                        );
-                        if (empDefRows.length > 0) {
-                            const defOrderCode    = empDefRows[0].ordered_by    || '';
-                            const defDispatchCode = empDefRows[0].dispatched_by || '';
-                            const defCodes = [...new Set([defOrderCode, defDispatchCode].filter(Boolean))];
-                            if (defCodes.length > 0) {
-                                const defEmpRows = await query(
-                                    `SELECT emp_id, emp_name FROM broiler.employee WHERE emp_id = ANY($1::text[])`,
-                                    [defCodes]
-                                );
-                                const defEmpMap = {};
-                                defEmpRows.forEach(e => { defEmpMap[e.emp_id] = e.emp_name || ''; });
-                                if (!order_by_name    && defOrderCode)    order_by_name    = defEmpMap[defOrderCode]    || defOrderCode;
-                                if (!dispatch_by_name && defDispatchCode) dispatch_by_name = defEmpMap[defDispatchCode] || defDispatchCode;
-                            }
+        const orderByCleanCode    = extractCodeOnly(rest.order_by);
+        const dispatchByCleanCode = extractCodeOnly(rest.dispatch_by);
+
+        // 2. If name is still missing, lookup in DB / SAP
+        if (!order_by_name || !dispatch_by_name) {
+            try {
+                const rawCodes = [orderByCleanCode, dispatchByCleanCode].filter(Boolean);
+                if (rawCodes.length > 0) {
+                    const allCodes = [
+                        ...rawCodes,
+                        ...rawCodes.map(c => c.replace(/^0+/, '')),
+                        ...rawCodes.map(c => c.padStart(8, '0'))
+                    ];
+                    const uniqueCodes = [...new Set(allCodes.filter(Boolean))];
+
+                    // Try matching by emp_id first, then by emp_name (username fallback)
+                    const empRows = await query(
+                        `SELECT emp_id, emp_name FROM broiler.employee
+                         WHERE emp_id = ANY($1::text[]) OR lower(emp_name) = ANY($2::text[])`,
+                        [uniqueCodes, uniqueCodes.map(c => c.toLowerCase())]
+                    );
+                    const empByIdMap = {};
+                    const empByNameMap = {};
+                    empRows.forEach(e => {
+                        const id = String(e.emp_id || '').trim();
+                        const name = String(e.emp_name || '').trim();
+                        if (id) {
+                            empByIdMap[id.toLowerCase()] = name;
+                            empByIdMap[id.replace(/^0+/, '').toLowerCase()] = name;
+                            empByIdMap[id.padStart(8, '0').toLowerCase()] = name;
                         }
-                    } catch (defErr) {
-                        console.warn('sales_emp_default fallback lookup failed:', defErr.message);
+                        if (name) empByNameMap[name.toLowerCase()] = name;
+                    });
+                    const resolveEmpName = (code) => {
+                        if (!code) return '';
+                        const c = String(code).trim().toLowerCase();
+                        return empByIdMap[c]
+                            || empByIdMap[c.replace(/^0+/, '')]
+                            || empByIdMap[c.padStart(8, '0')]
+                            || empByNameMap[c]
+                            || '';
+                    };
+
+                    if (!order_by_name)    order_by_name    = resolveEmpName(orderByCleanCode);
+                    if (!dispatch_by_name) dispatch_by_name = resolveEmpName(dispatchByCleanCode);
+
+                    // 3. Fallback: plant default employee codes from sales_emp_default
+                    if ((!order_by_name || !dispatch_by_name) && rest.plant) {
+                        try {
+                            const empDefRows = await query(
+                                `SELECT ordered_by, dispatched_by FROM broiler.sales_emp_default WHERE plant = $1 LIMIT 1`,
+                                [String(rest.plant)]
+                            );
+                            if (empDefRows.length > 0) {
+                                const defOrderCode    = extractCodeOnly(empDefRows[0].ordered_by);
+                                const defDispatchCode = extractCodeOnly(empDefRows[0].dispatched_by);
+                                const defCodes = [...new Set([defOrderCode, defDispatchCode].filter(Boolean))];
+                                if (defCodes.length > 0) {
+                                    const defEmpRows = await query(
+                                        `SELECT emp_id, emp_name FROM broiler.employee WHERE emp_id = ANY($1::text[])`,
+                                        [defCodes]
+                                    );
+                                    const defEmpMap = {};
+                                    defEmpRows.forEach(e => {
+                                        const id = String(e.emp_id || '').trim();
+                                        const name = String(e.emp_name || '').trim();
+                                        defEmpMap[id] = name;
+                                        defEmpMap[id.replace(/^0+/, '')] = name;
+                                    });
+                                    if (!order_by_name && defOrderCode) {
+                                        order_by_name = defEmpMap[defOrderCode] || defEmpMap[defOrderCode.replace(/^0+/, '')] || extractNameOnly(empDefRows[0].ordered_by) || '';
+                                    }
+                                    if (!dispatch_by_name && defDispatchCode) {
+                                        dispatch_by_name = defEmpMap[defDispatchCode] || defEmpMap[defDispatchCode.replace(/^0+/, '')] || extractNameOnly(empDefRows[0].dispatched_by) || '';
+                                    }
+                                }
+                            }
+                        } catch (defErr) {
+                            console.warn('sales_emp_default fallback lookup failed:', defErr.message);
+                        }
+                    }
+
+                    // 4. Fallback: Lookup directly from SAP /emp_master endpoint
+                    if (!order_by_name || !dispatch_by_name) {
+                        try {
+                            const sapEmpMap = await fetchSapEmployeeInfo();
+                            if (!order_by_name && orderByCleanCode) {
+                                order_by_name = sapEmpMap[orderByCleanCode] || sapEmpMap[orderByCleanCode.replace(/^0+/, '')] || '';
+                            }
+                            if (!dispatch_by_name && dispatchByCleanCode) {
+                                dispatch_by_name = sapEmpMap[dispatchByCleanCode] || sapEmpMap[dispatchByCleanCode.replace(/^0+/, '')] || '';
+                            }
+                        } catch (sapEmpErr) {
+                            console.warn('SAP emp_master lookup failed:', sapEmpErr.message);
+                        }
                     }
                 }
-
-                // Final fallback: use the code itself as the name if still empty
-                if (!order_by_name && orderByCode)       order_by_name    = orderByCode;
-                if (!dispatch_by_name && dispatchByCode) dispatch_by_name = dispatchByCode;
+            } catch (empErr) {
+                console.warn('Employee name lookup failed (order_by/dispatch_by):', empErr.message);
             }
-        } catch (empErr) {
-            console.warn('Employee name lookup failed (order_by/dispatch_by):', empErr.message);
         }
 
         // --- Lookup line name from broiler.line_master ---
@@ -918,11 +997,11 @@ exports.submit = async (req, res) => {
             }
         }
 
-        // Final fallbacks — use code if name still not resolved
-        if (!farmer_name)   farmer_name   = extractCodeOnly(rest.farmer)   || '';
-        if (!customer_name) customer_name = extractCodeOnly(rest.customer) || '';
-        if (!order_by_name && rest.order_by)       order_by_name    = extractCodeOnly(rest.order_by);
-        if (!dispatch_by_name && rest.dispatch_by) dispatch_by_name = extractCodeOnly(rest.dispatch_by);
+        // Final fallbacks — use name from "Code - Name" or code only if name could not be resolved
+        if (!farmer_name)   farmer_name   = extractNameOnly(rest.farmer)   || extractCodeOnly(rest.farmer)   || '';
+        if (!customer_name) customer_name = extractNameOnly(rest.customer) || extractCodeOnly(rest.customer) || '';
+        if (!order_by_name && rest.order_by)       order_by_name    = extractNameOnly(rest.order_by)    || extractCodeOnly(rest.order_by);
+        if (!dispatch_by_name && rest.dispatch_by) dispatch_by_name = extractNameOnly(rest.dispatch_by) || extractCodeOnly(rest.dispatch_by);
 
         // Strip leading zeros from dc_no before sending to SAP
         const cleanDcNo = rest.dc_no
@@ -1233,11 +1312,24 @@ exports.getAll = async (req, res) => {
 
             console.log(`[getAll] doc_no=${row.doc_no} | customer=${row.customer} | customer_name resolved="${customer_name}" | farmer=${row.farmer} | farmer_name resolved="${farmer_name}"`);
 
+            // Resolve order_by and dispatch_by names
+            const order_by_name =
+                raw.order_by_name ||
+                extractNameOnly(row.order_by || raw.order_by) ||
+                null;
+
+            const dispatch_by_name =
+                raw.dispatch_by_name ||
+                extractNameOnly(row.dispatch_by || raw.dispatch_by) ||
+                null;
+
             return {
                 ...row,
                 customer_name,
                 farmer_name,
                 plant_name,
+                order_by_name,
+                dispatch_by_name,
                 // Expose parsed details so frontend can also read them directly
                 customer_details: customerDetails,
                 farmer_details: farmerDetails,
