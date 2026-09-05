@@ -43,7 +43,7 @@ const formatFeedTransferDataToSap = (data) => {
 const generateFeedTransferDC = async (data) => {
     try {
         const { date, plant, plant_name, transfer_type, feed_type, vehicle_no, ift_charges, from_farmer, from_farmer_name, from_farmer_mobile, from_farmer_pincode, to_farmer, to_farmer_name, to_farmer_mobile, from_to_pincode, from_batch, to_batch, from_bird_stock, to_bird_stock, from_age, to_age, materials } = data;
-        const user_id = "test"
+        const user_id = data?.user_id || "unknown";
         const countRes = await query(`SELECT COUNT(*) FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable}`);
         const count = parseInt(countRes?.[0]?.count || 0);
         const doc_no = `FT/DC/${count + 11001}`;

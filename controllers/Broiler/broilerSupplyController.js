@@ -306,7 +306,7 @@ const saveBillOfSupplyToDB = async (data) => {
     } = data;
 
     const birds_details = [];
-    const user_id = "test";
+    const user_id = data.user_id || data.created_by || "unknown";
 
     const seqRes = await query(
         `SELECT nextval('broiler.bill_of_supply_doc_seq') AS seq`
@@ -591,7 +591,7 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
         gross_value,
         bill_value,
         gross_value_in_words: toWords.convert(bill_value),
-        user_id: data.user_id || "test",
+        user_id: data.user_id || data.created_by || "unknown",
         doc_no,
         driver_name: driver_name || "-",
         supervisor_name: data.order_by_name || data.order_by || "-",
@@ -1147,6 +1147,7 @@ exports.submit = async (req, res) => {
                     maxBodyLength: Infinity,
                     url: finalUrl,
                     timeout: 30000, // 30 second timeout
+                    validateStatus: () => true, // Accept all status codes so 200 (success) and 400 (failed) can be evaluated directly
                     auth: {
                         username: process.env.BROILER_SAP_USERNAME,
                         password: process.env.BROILER_SAP_PASSWORD
@@ -1158,98 +1159,121 @@ exports.submit = async (req, res) => {
 
             const responses = await Promise.allSettled(requests);
 
-            const failed = responses.find(r => r.status === 'rejected');
-            console.log("======================================================");
-            console.log("======================================================");
-            console.log("======================================================");
-            console.log(responses);
-            console.log("======================================================");
-            console.log("======================================================");
-            console.log("======================================================");
-            
-            if (failed) {
-                const err = failed.reason;
-                const isNetworkError = !err?.response; // No HTTP response = network/connection issue
-
-                if (isNetworkError) {
-                    // Network-level error: timeout, socket hang up, connection refused, etc.
-                    const code = err?.code || '';
-                    let netMsg = 'Could not connect to SAP server.';
-                    if (code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
-                        netMsg = 'SAP server did not respond in time (timeout). Please try again.';
-                    } else if (code === 'ECONNREFUSED') {
-                        netMsg = 'SAP server refused the connection. Please check network/SAP status.';
-                    } else if (err?.message?.includes('socket hang up') || code === 'ECONNRESET') {
-                        netMsg = 'Connection to SAP was lost. Please try again in a moment.';
+            // Helper to extract clean error message from SAP error response
+            const extractSapErrorMessage = (rawErrData) => {
+                if (!rawErrData) return "SAP rejected submission";
+                if (typeof rawErrData === 'string') {
+                    if (rawErrData.includes('msgText')) {
+                        const match = rawErrData.match(/id=\"msgText\"[^>]*>([^<]+)</);
+                        if (match && match[1]) return match[1].trim();
                     }
-                    console.error("SAP NETWORK ERROR:", code, err?.message);
-                    return res.status(500).json({
-                        status: false,
-                        message: netMsg,
-                        error: err?.message
-                    });
+                    const stripped = rawErrData.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+                    return stripped || rawErrData;
                 }
+                if (Array.isArray(rawErrData)) {
+                    const errItem = rawErrData.find(item => item.TYPE === 'E' || item.type === 'E' || item.STATUS === 'E' || item.MSG_TYPE === 'E');
+                    if (errItem) return errItem.MESSAGE || errItem.message || errItem.MSGTX || JSON.stringify(errItem);
+                    return JSON.stringify(rawErrData);
+                }
+                if (typeof rawErrData === 'object') {
+                    return rawErrData.message || rawErrData.MESSAGE || rawErrData.error || JSON.stringify(rawErrData);
+                }
+                return String(rawErrData);
+            };
 
-                // SAP returned an HTTP error response
-                const rawErrData = err?.response?.data;
-                // Extract readable message from SAP HTML error pages
-                let sapErrMsg = typeof rawErrData === 'string' && rawErrData.includes('msgText')
-                    ? (rawErrData.match(/id=\"msgText\"[^>]*>([^<]+)</) || [])[1]?.trim() || 'SAP server error'
-                    : (typeof rawErrData === 'object' ? JSON.stringify(rawErrData) : String(rawErrData || 'SAP error'));
-                console.error("SAP HTTP ERROR:", sapErrMsg);
-
-                return res.status(500).json({
-                    status: false,
-                    message: `SAP rejected submission: ${sapErrMsg}`,
-                    error: sapErrMsg
-                });
-            }
-
-            // Check SAP response body for explicit SAP application errors
             for (const r of responses) {
-                const resData = r.value?.data;
-                console.log("Background SAP Response Data:", JSON.stringify(resData));
+                // If the request was rejected at network level (timeout, DNS, connection refused)
+                if (r.status === 'rejected') {
+                    const err = r.reason;
+                    const isNetworkError = !err?.response;
 
-                let hasError = false;
-                let sapErrorMsg = "";
-
-                if (resData) {
-                    if (Array.isArray(resData)) {
-                        // SAP BAPI-style: array of messages, each with a TYPE field
-                        // Only treat as error if EVERY item is an error (TYPE 'E') and NONE are success (TYPE 'S')
-                        const hasSuccess = resData.some(item =>
-                            item.TYPE === 'S' || item.type === 'S' || item.STATUS === 'S'
-                        );
-                        if (!hasSuccess) {
-                            const errItem = resData.find(item =>
-                                item.TYPE === 'E' || item.type === 'E' || item.STATUS === 'E' || item.MSG_TYPE === 'E'
-                            );
-                            if (errItem) {
-                                hasError = true;
-                                sapErrorMsg = errItem.MESSAGE || errItem.message || errItem.MSGTX || JSON.stringify(errItem);
-                            }
+                    if (isNetworkError) {
+                        const code = err?.code || '';
+                        let netMsg = 'Could not connect to SAP server.';
+                        if (code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
+                            netMsg = 'SAP server did not respond in time (timeout). Please try again.';
+                        } else if (code === 'ECONNREFUSED') {
+                            netMsg = 'SAP server refused the connection. Please check network/SAP status.';
+                        } else if (err?.message?.includes('socket hang up') || code === 'ECONNRESET') {
+                            netMsg = 'Connection to SAP was lost. Please try again in a moment.';
                         }
-                    } else if (typeof resData === 'object' && !Array.isArray(resData)) {
-                        // Plain object: only fail if explicitly status: false (boolean) or TYPE strictly 'E'
-                        if (resData.status === false || resData.TYPE === 'E' || resData.type === 'E' || resData.STATUS === 'E') {
-                            hasError = true;
-                            sapErrorMsg = resData.message || resData.MESSAGE || resData.error || JSON.stringify(resData);
-                        }
+                        console.error("SAP NETWORK ERROR:", code, err?.message);
+                        return res.status(500).json({
+                            status: false,
+                            message: netMsg,
+                            error: err?.message
+                        });
                     }
-                    // Note: string responses are NOT treated as errors — SAP may return plain text
-                    // success messages that contain words like "error" (e.g., "posted without error")
-                }
 
-                if (hasError) {
-                    console.error("SAP Application Error detected:", sapErrorMsg);
+                    const status = err.response.status;
+                    const rawErrData = err.response.data;
+                    const sapErrMsg = extractSapErrorMessage(rawErrData);
+                    console.error("SAP HTTP ERROR:", status, sapErrMsg);
+
                     return res.status(400).json({
                         status: false,
-                        message: `SAP submission rejected: ${sapErrorMsg}`,
-                        error: resData
+                        message: `SAP rejected submission: ${sapErrMsg}`,
+                        error: rawErrData
                     });
                 }
 
-                uploadCount++;
+                // Promise fulfilled: Check SAP HTTP status
+                // 200 = check data validation, 400 (or non-200) = FAILED
+                const sapRes = r.value;
+                console.log(`[BOS SAP Submit] HTTP Status: ${sapRes.status}, Data:`, JSON.stringify(sapRes.data));
+
+                if (sapRes.status === 200) {
+                    const resData = sapRes.data;
+
+                    let hasError = false;
+                    let sapErrorMsg = "";
+
+                    if (resData) {
+                        if (Array.isArray(resData)) {
+                            // SAP BAPI-style: array of messages, each with a TYPE field
+                            // Only treat as error if EVERY item is an error (TYPE 'E') and NONE are success (TYPE 'S')
+                            const hasSuccess = resData.some(item =>
+                                item.TYPE === 'S' || item.type === 'S' || item.STATUS === 'S'
+                            );
+                            if (!hasSuccess) {
+                                const errItem = resData.find(item =>
+                                    item.TYPE === 'E' || item.type === 'E' || item.STATUS === 'E' || item.MSG_TYPE === 'E'
+                                );
+                                if (errItem) {
+                                    hasError = true;
+                                    sapErrorMsg = errItem.MESSAGE || errItem.message || errItem.MSGTX || JSON.stringify(errItem);
+                                }
+                            }
+                        } else if (typeof resData === 'object' && !Array.isArray(resData)) {
+                            // Plain object: only fail if explicitly status: false (boolean) or TYPE strictly 'E'
+                            if (resData.status === false || resData.TYPE === 'E' || resData.type === 'E' || resData.STATUS === 'E') {
+                                hasError = true;
+                                sapErrorMsg = resData.message || resData.MESSAGE || resData.error || JSON.stringify(resData);
+                            }
+                        }
+                    }
+
+                    if (hasError) {
+                        console.error("SAP Application Error detected:", sapErrorMsg);
+                        return res.status(400).json({
+                            status: false,
+                            message: `SAP submission rejected: ${sapErrorMsg}`,
+                            error: resData
+                        });
+                    }
+
+                    uploadCount++;
+                } else {
+                    // HTTP 400 (or any non-200 status) means rejected
+                    const rawErrData = sapRes.data;
+                    const sapErrMsg = extractSapErrorMessage(rawErrData);
+                    console.error(`SAP Submit Failed (HTTP ${sapRes.status}):`, sapErrMsg);
+                    return res.status(400).json({
+                        status: false,
+                        message: `SAP submission rejected: ${sapErrMsg}`,
+                        error: rawErrData
+                    });
+                }
             }
 
             console.log("SAP uploads successful count:", uploadCount);

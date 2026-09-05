@@ -31,7 +31,7 @@ exports.create = async (req, res) => {
         }
 
         const { date, plant, farmer, batch, farm_length, farm_width, chick_house_capacity, chick_excess_housed } = data;
-        const user_id = "test"
+        const user_id = data.user_id || req.body.user_id || "unknown";
         const countRes = await query(`SELECT COUNT(*) FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable}`);
         
         const parsedDate = parse(date, 'd/M/yyyy', new Date());

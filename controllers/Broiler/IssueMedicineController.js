@@ -45,7 +45,7 @@ const formatIssueMedicineDataToSap = (data) => {
 const generateMedicineIssueDC = async (data) => {
     try {
         const { plant, plant_name, farmer, farmer_name, bird_stock, age, materials } = data;
-        const user_id = "test"
+        const user_id = data?.user_id || "unknown";
         const countRes = await query(`SELECT COUNT(*) FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable}`);
         const count = parseInt(countRes?.[0]?.count || 0);
         const doc_no = `MED/DC/${count + 11001}`;
