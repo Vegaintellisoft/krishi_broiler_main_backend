@@ -16,10 +16,14 @@ let cachedTokens = null;
 let tokenExpiry = 0;
 
 /**
- * COMMON AUTH HANDLER WITH 4-HOUR TOKEN CACHING
+ * COMMON AUTH HANDLER WITH TOKEN CACHING
  */
 async function getSaralTokens(forceRefresh = false) {
   const now = Date.now();
+  if (forceRefresh) {
+    cachedTokens = null;
+    tokenExpiry = 0;
+  }
   if (!forceRefresh && cachedTokens && now < tokenExpiry) {
     return cachedTokens;
   }
@@ -64,8 +68,8 @@ async function getSaralTokens(forceRefresh = false) {
       authToken,
       sek,
     };
-    // Cache for 4 hours
-    tokenExpiry = now + (4 * 60 * 60 * 1000);
+    // Cache for 2 hours
+    tokenExpiry = now + (2 * 60 * 60 * 1000);
 
     return cachedTokens;
   } catch (error) {
@@ -77,62 +81,94 @@ async function getSaralTokens(forceRefresh = false) {
 }
 
 /**
+ * Check if the Saral / NIC response indicates an expired or invalid auth token (Error 238, etc.)
+ */
+function isTokenExpiredError(data) {
+  if (!data) return false;
+
+  const tokenErrorCodes = ["238", "215", "218", "228"];
+  const errorCodesStr = String(data.errorCodes || "");
+  const hasCode = errorCodesStr.split(",").some((code) => tokenErrorCodes.includes(code.trim()));
+  if (hasCode) return true;
+
+  if (Array.isArray(data.errorDetails)) {
+    return data.errorDetails.some((err) => {
+      const code = String(err.errorCode || "").trim();
+      const msg = String(err.errorMessage || "").toLowerCase();
+      return (
+        tokenErrorCodes.includes(code) ||
+        msg.includes("invalid auth token") ||
+        msg.includes("token expired") ||
+        msg.includes("auth token")
+      );
+    });
+  }
+
+  return false;
+}
+
+/**
+ * Centralized API caller that handles authentication and automatically retries
+ * once if the server returns 401 or if the response body contains Error 238.
+ */
+async function callEwayApi(payload, action) {
+  let tokens = await getSaralTokens();
+
+  const makeRequest = (currentTokens) => {
+    return axios.post(
+      `${SARAL_BASE}/v1.03/ewayapi`,
+      payload,
+      {
+        headers: {
+          authenticationToken: currentTokens.authenticationToken,
+          subscriptionId: currentTokens.subscriptionId,
+          username: USERNAME,
+          Gstin: GSTIN,
+          AuthToken: currentTokens.authToken,
+          sek: currentTokens.sek,
+          action: action,
+          Server: 1,
+        },
+        timeout: API_TIMEOUT,
+      }
+    );
+  };
+
+  let ewayRes;
+  try {
+    ewayRes = await makeRequest(tokens);
+  } catch (apiErr) {
+    // If HTTP 401 Unauthorized, refresh and retry once
+    if (apiErr.response?.status === 401) {
+      console.log("Saral returned HTTP 401. Refreshing token and retrying...");
+      tokens = await getSaralTokens(true);
+      ewayRes = await makeRequest(tokens);
+    } else {
+      throw apiErr;
+    }
+  }
+
+  // If HTTP is 200 OK but response contains Error 238 (Invalid Auth Token), auto-refresh and retry once
+  if (isTokenExpiredError(ewayRes.data)) {
+    console.warn("E-Way Bill API returned Error 238 / Invalid Auth Token. Refreshing token and retrying...");
+    tokens = await getSaralTokens(true);
+    ewayRes = await makeRequest(tokens);
+  }
+
+  return ewayRes.data;
+}
+
+/**
  * GENERATE E-WAY BILL
  */
 async function fetchEWayBillNumber(invoicePayload) {
   try {
-    let tokens = await getSaralTokens();
-
-    let ewayRes;
-    try {
-      ewayRes = await axios.post(
-        `${SARAL_BASE}/v1.03/ewayapi`,
-        invoicePayload,
-        {
-          headers: {
-            authenticationToken: tokens.authenticationToken,
-            subscriptionId: tokens.subscriptionId,
-            username: USERNAME,
-            Gstin: GSTIN,
-            AuthToken: tokens.authToken,
-            sek: tokens.sek,
-            action: "GENEWAYBILL",
-            Server: 1,
-          },
-          timeout: API_TIMEOUT,
-        }
-      );
-    } catch (apiErr) {
-      // If 401 Unauthorized, token may have expired early — retry once with fresh tokens
-      if (apiErr.response?.status === 401) {
-        console.log("Saral token expired, refreshing and retrying...");
-        tokens = await getSaralTokens(true);
-        ewayRes = await axios.post(
-          `${SARAL_BASE}/v1.03/ewayapi`,
-          invoicePayload,
-          {
-            headers: {
-              authenticationToken: tokens.authenticationToken,
-              subscriptionId: tokens.subscriptionId,
-              username: USERNAME,
-              Gstin: GSTIN,
-              AuthToken: tokens.authToken,
-              sek: tokens.sek,
-              action: "GENEWAYBILL",
-              Server: 1,
-            },
-            timeout: API_TIMEOUT,
-          }
-        );
-      } else {
-        throw apiErr;
-      }
-    }
-
-    const data = ewayRes.data;
+    const data = await callEwayApi(invoicePayload, "GENEWAYBILL");
 
     if (data.errorCodes) {
-      return { error: `E-Way Error Codes: ${data.errorCodes}` };
+      const detailMsg = data.errorDetails?.map((e) => e.errorMessage).filter(Boolean).join(", ");
+      const errorMsg = detailMsg ? `E-Way Error (${data.errorCodes}): ${detailMsg}` : `E-Way Error Codes: ${data.errorCodes}`;
+      return { error: errorMsg };
     }
 
     if (!data.ewayBillNo) {
@@ -164,26 +200,8 @@ async function fetchEWayBillNumber(invoicePayload) {
  */
 async function cancelEway(cancelPayload) {
   try {
-    const tokens = await getSaralTokens();
-
-    const cancelRes = await axios.post(
-      `${SARAL_BASE}/v1.03/ewayapi`,
-      cancelPayload,
-      {
-        headers: {
-          authenticationToken: tokens.authenticationToken,
-          subscriptionId: tokens.subscriptionId,
-          username: USERNAME,
-          Gstin: GSTIN,
-          AuthToken: tokens.authToken,
-          sek: tokens.sek,
-          action: "CANEWB",
-        },
-        timeout: API_TIMEOUT,
-      }
-    );
-
-    return cancelRes.data;
+    const data = await callEwayApi(cancelPayload, "CANEWB");
+    return data;
   } catch (error) {
     console.error("E-Way Bill Cancellation Failed:", error.response?.data || error.message);
     return { error: error.message };

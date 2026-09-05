@@ -1168,8 +1168,8 @@ exports.generateChallanPDFByData = async (req, res) => {
         const fromAddressResult = await query(fromAddressQuery, [dcData.dispatchFromId]);
         const full_from_address = fromAddressResult.length > 0 ? fromAddressResult[0].address : 'N/A';
 
-        // Generate the New Doc Number
-        const doc_no = await getNextDocNumber(dcData.materials[0].mat_id, full_from_address?.city);
+        // In preview mode before approval, official DC number is NOT generated yet
+        const doc_no = "PENDING APPROVAL";
 
         // console.log(doc_no);
         // return;
@@ -1346,7 +1346,7 @@ exports.generateChallanPDFByData = async (req, res) => {
             fs.mkdirSync(reportsDir);
         }
 
-        const safeDocPart = String(doc_no || "UNKNOWN").split('/')[2] || "NA";
+        const safeDocPart = doc_no === "PENDING APPROVAL" ? "PREVIEW" : (String(doc_no || "UNKNOWN").split('/')[2] || "NA");
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 
         const fileName = `${safeDocPart}_${timestamp}.pdf`;

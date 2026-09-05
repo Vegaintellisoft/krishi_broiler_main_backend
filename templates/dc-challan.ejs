@@ -192,7 +192,11 @@
         <tr>
           <td class="left-align"><b>Doc No.</b></td>
           <td class="left-align">
-            <%= doc_no %>
+            <% if (typeof viewMode !== 'undefined' && viewMode || !doc_no || doc_no === 'PENDING APPROVAL') { %>
+              <b style="color: #d97706;">PENDING APPROVAL</b>
+            <% } else { %>
+              <%= doc_no %>
+            <% } %>
           </td>
         </tr>
         <tr>

@@ -31,12 +31,37 @@ const extractCodeOnly = (val) => {
     return str.includes(' - ') ? str.split(' - ')[0].trim() : str;
 };
 
-// Extracts just the Name from "Code - Name" format strings.
-// e.g. "00011248 - TAMILVANAN.R" → "TAMILVANAN.R"
 const extractNameOnly = (val) => {
     if (!val) return '';
     const str = String(val).trim();
     return str.includes(' - ') ? str.split(' - ').slice(1).join(' - ').trim() : '';
+};
+
+// Safely formats Date objects or date strings to 'YYYY-MM-DD'
+// scoped specifically to broiler supply without altering global pg parsers.
+const formatDateToYMD = (d) => {
+    if (!d) return null;
+    if (typeof d === 'string') {
+        const s = d.trim();
+        // If already YYYY-MM-DD
+        if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+        // If DD-MM-YYYY
+        const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+        if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+        // If ISO string (e.g. 2026-09-01T18:30:00.000Z or 2026-09-02T10:08:46.689Z)
+        try {
+            const dt = new Date(s);
+            if (!isNaN(dt.getTime())) {
+                return format(dt, 'yyyy-MM-dd');
+            }
+        } catch (_) {
+            return s.slice(0, 10);
+        }
+    }
+    if (d instanceof Date && !isNaN(d.getTime())) {
+        return format(d, 'yyyy-MM-dd');
+    }
+    return String(d);
 };
 
 /**
@@ -90,7 +115,7 @@ const fetchSapContactInfo = async (farmerCode, customerCode) => {
             const farmer = morRes.data.find(f => String(f.lifnr).trim() === String(farmerCode).trim());
             if (farmer) {
                 farmerPhone = farmer.telephone || null;
-                farmerName  = farmer.name1 || farmerCode;
+                farmerName = farmer.name1 || farmerCode;
                 const streetParts = [farmer.street, farmer.street2, farmer.street3].filter(Boolean).map(s => s.replace(/,\s*$/, '').trim()).filter(Boolean).join(', ');
                 const districtPin = [farmer.zzlineN, farmer.postlcode].filter(Boolean).join(' - ');
                 farmerAddress = [streetParts, districtPin].filter(Boolean).join(', ') || '';
@@ -114,7 +139,7 @@ const fetchSapContactInfo = async (farmerCode, customerCode) => {
             const cust = custRes.data.find(c => String(c.kunnr).trim() === String(customerCode).trim());
             if (cust) {
                 customerPhone = cust.telf1 || null;
-                customerName  = cust.name1 || customerCode;
+                customerName = cust.name1 || customerCode;
                 console.log(`fetchSapContactInfo: Customer found in SAP API. Phone: "${customerPhone}", Name: "${customerName}"`);
             } else {
                 console.warn(`fetchSapContactInfo: Customer "${customerCode}" not found in SAP API list of ${custRes.data.length} records.`);
@@ -186,52 +211,52 @@ const formatBillOfSupplyDataToSap = (data) => {
     const config = broilerDataEntry.bill_of_supply;
 
     // Aggregate all cage rows into a single totals object.
-    const totalBirdQty     = load_details.reduce((sum, item) => sum + (Number(item.birdQty || item.birds || item.bird_qty) || 0), 0);
-    const totalWeight      = load_details.reduce((sum, item) => sum + (Number(item.weight || item.netWeight || item.net_weight) || 0), 0);
+    const totalBirdQty = load_details.reduce((sum, item) => sum + (Number(item.birdQty || item.birds || item.bird_qty) || 0), 0);
+    const totalWeight = load_details.reduce((sum, item) => sum + (Number(item.weight || item.netWeight || item.net_weight) || 0), 0);
 
-    const effectiveRate    = Number(data.rate) || 0;
-    const computedGross    = +(totalWeight * effectiveRate).toFixed(2);
+    const effectiveRate = Number(data.rate) || 0;
+    const computedGross = +(totalWeight * effectiveRate).toFixed(2);
 
-    const totalGrossValue  = computedGross > 0 
-        ? computedGross 
+    const totalGrossValue = computedGross > 0
+        ? computedGross
         : load_details.reduce((sum, item) => sum + (Number(item.gross_value || item.grossValue) || 0), 0);
-    const totalBillValue   = computedGross > 0 
-        ? computedGross 
+    const totalBillValue = computedGross > 0
+        ? computedGross
         : load_details.reduce((sum, item) => sum + (Number(item.bill_value || item.billValue) || 0), 0);
 
     const totalEmptyWeight = load_details.reduce((sum, item) => sum + (Number(item.emptyWeight || item.empty_weight || item.emptyWt || item.empty) || 0), 0) || Number(data.emptyWeight || data.empty_weight || 0);
-    const totalLoadWeight  = load_details.reduce((sum, item) => sum + (Number(item.loadWeight || item.load_weight || item.loadWt || item.load) || 0), 0) || Number(data.loadWeight || data.load_weight || 0);
-    const totalCages       = load_details.reduce((sum, item) => sum + (Number(item.cage || item.cages || item.no_cages) || 0), 0);
-    const avgWeight        = totalBirdQty > 0 ? +(totalWeight / totalBirdQty).toFixed(2) : 0;
+    const totalLoadWeight = load_details.reduce((sum, item) => sum + (Number(item.loadWeight || item.load_weight || item.loadWt || item.load) || 0), 0) || Number(data.loadWeight || data.load_weight || 0);
+    const totalCages = load_details.reduce((sum, item) => sum + (Number(item.cage || item.cages || item.no_cages) || 0), 0);
+    const avgWeight = totalBirdQty > 0 ? +(totalWeight / totalBirdQty).toFixed(2) : 0;
 
     // Build one combined row: header-level data overridden by aggregated totals
     // SAP code fields must be plain codes (strip "Code - Name" format before sending to SAP)
     const aggregated = {
         ...data,
         // Strip "Code - Name" → just code for SAP API fields
-        farmer:         extractCodeOnly(data.farmer),
-        customer:       extractCodeOnly(data.customer),
-        plant:          extractCodeOnly(data.plant),
-        order_by:       extractCodeOnly(data.order_by),
-        dispatch_by:    extractCodeOnly(data.dispatch_by),
-        line_no:        extractCodeOnly(data.line_no),
-        rate:           effectiveRate,
-        birdQty:        totalBirdQty,
-        weight:         +totalWeight.toFixed(3),
-        gross_value:    +totalGrossValue.toFixed(2),
-        bill_value:     +totalBillValue.toFixed(2),
+        farmer: extractCodeOnly(data.farmer),
+        customer: extractCodeOnly(data.customer),
+        plant: extractCodeOnly(data.plant),
+        order_by: extractCodeOnly(data.order_by),
+        dispatch_by: extractCodeOnly(data.dispatch_by),
+        line_no: extractCodeOnly(data.line_no),
+        rate: effectiveRate,
+        birdQty: totalBirdQty,
+        weight: +totalWeight.toFixed(3),
+        gross_value: +totalGrossValue.toFixed(2),
+        bill_value: +totalBillValue.toFixed(2),
         average_weight: avgWeight,
-        emptyWeight:    +totalEmptyWeight.toFixed(3),
-        loadWeight:     +totalLoadWeight.toFixed(3),
-        cage:           totalCages,
+        emptyWeight: +totalEmptyWeight.toFixed(3),
+        loadWeight: +totalLoadWeight.toFixed(3),
+        cage: totalCages,
         // bird_stock comes from data top-level (set by mobile or admin) — support all key variants
-        bird_stock:     Number(data.bird_stock ?? data.birdStock ?? data.stock ?? 0),
+        bird_stock: Number(data.bird_stock ?? data.birdStock ?? data.stock ?? 0),
         // Employee names for order_by / dispatch_by & Farmer Name (looked up before calling this function)
-        order_by_name:    data.order_by_name    || extractNameOnly(data.order_by)    || '',
+        order_by_name: data.order_by_name || extractNameOnly(data.order_by) || '',
         dispatch_by_name: data.dispatch_by_name || extractNameOnly(data.dispatch_by) || '',
-        farmer_name:      data.farmer_name      || extractNameOnly(data.farmer)      || '',
-        customer_name:    data.customer_name    || extractNameOnly(data.customer)    || '',
-        line_no_name:     data.line_no_name     || extractNameOnly(data.line_no)     || '',
+        farmer_name: data.farmer_name || extractNameOnly(data.farmer) || '',
+        customer_name: data.customer_name || extractNameOnly(data.customer) || '',
+        line_no_name: data.line_no_name || extractNameOnly(data.line_no) || '',
     };
 
     const mappedRow = {};
@@ -283,18 +308,17 @@ const saveBillOfSupplyToDB = async (data) => {
     const birds_details = [];
     const user_id = "test";
 
-   const seqRes = await query(
-    `SELECT nextval('broiler.bill_of_supply_doc_seq') AS seq`
-);
+    const seqRes = await query(
+        `SELECT nextval('broiler.bill_of_supply_doc_seq') AS seq`
+    );
 
-if (!seqRes || seqRes.length === 0) {
-    throw new Error('Failed to generate document number: sequence query returned no result');
-}
+    if (!seqRes || seqRes.length === 0) {
+        throw new Error('Failed to generate document number: sequence query returned no result');
+    }
 
-const doc_no = `BOS/DC/${seqRes[0].seq}`;
+    const doc_no = `BOS/DC/${seqRes[0].seq}`;
 
-    const parsedDate = new Date(date);
-    const formattedDate = format(parsedDate, 'yyyy-MM-dd');
+    const formattedDate = formatDateToYMD(date);
 
     const { gross_value, bill_value, average_weight } = computeTotals(load_details);
     // return;
@@ -323,8 +347,8 @@ const doc_no = `BOS/DC/${seqRes[0].seq}`;
         vehicle_no, order_by, dispatch_by, plant, farmer, line_no,
         farm_shed_no, batch, age, bird_stock, Number(excess) || 0, Number(shortage) || 0,
         JSON.stringify(load_details), JSON.stringify(birds_details), rate, average_weight, gross_value,
-        bill_value, user_id, JSON.stringify({ ...data, tentative_rate: String(rate) }), rate,'COMPLETED',
-new Date()
+        bill_value, user_id, JSON.stringify({ ...data, tentative_rate: String(rate) }), rate, 'COMPLETED',
+        new Date()
     ];
 
     const dbResult = await query(insertQuery, values);
@@ -419,7 +443,7 @@ const dispatchBosSmsAsync = (data, contextName = 'create') => {
                 const t = computeTotals(data.load_details || []);
                 return { totalBirds: t.totalBirds || 0, totalWeight: +(t.net_weight || 0).toFixed(2) };
             })();
-            
+
             let farmerPhone = data.farmer_details?.telephone || null;
             let farmerName = data.farmer_details?.farmer_name || null;
             const streetParts = [data.farmer_details?.street, data.farmer_details?.street2, data.farmer_details?.street3].filter(Boolean).map(s => s.replace(/,\s*$/, '').trim()).filter(Boolean).join(', ');
@@ -504,7 +528,7 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
     if (!sap_post_date) {
         try {
             const dbResult = await query(
-                `SELECT sap_post_date FROM broiler.bill_of_supply WHERE doc_no = $1 LIMIT 1`,
+                `SELECT sap_post_date FROM broiler.${broilerDataEntry[TABLE_NAME]?.pgTable || 'bill_of_supply_dc'} WHERE doc_no = $1 LIMIT 1`,
                 [doc_no]
             );
             if (dbResult.length > 0) {
@@ -515,13 +539,20 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
         }
     }
 
-    // Format sap_post_date to DD.MM.YYYY format if present
+    // Format sap_post_date to DD-MM-YYYY format if present
     let formattedSapPostDate = "-";
     if (sap_post_date) {
         try {
-            const parsedSapPostDate = new Date(sap_post_date);
-            if (!isNaN(parsedSapPostDate.getTime())) {
-                formattedSapPostDate = format(parsedSapPostDate, 'dd-MM-yyyy');
+            if (typeof sap_post_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(sap_post_date.trim())) {
+                const parts = sap_post_date.trim().split('-');
+                formattedSapPostDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else if (typeof sap_post_date === 'string' && /^\d{2}-\d{2}-\d{4}$/.test(sap_post_date.trim())) {
+                formattedSapPostDate = sap_post_date.trim();
+            } else {
+                const parsedSapPostDate = new Date(sap_post_date);
+                if (!isNaN(parsedSapPostDate.getTime())) {
+                    formattedSapPostDate = format(parsedSapPostDate, 'dd-MM-yyyy');
+                }
             }
         } catch (e) {
             console.warn("Error formatting SAP Post Date for PDF:", e.message);
@@ -530,7 +561,24 @@ const generateBillOfSupplyPDF = async (data, doc_no) => {
 
     const { net_weight, gross_value, bill_value, average_weight } = computeTotals(load_details);
 
-    const formattedDate = format(new Date(data.date), 'dd-MM-yyyy');
+    let formattedDate = "-";
+    if (data.date) {
+        try {
+            if (typeof data.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.date.trim())) {
+                const parts = data.date.trim().split('-');
+                formattedDate = `${parts[2]}-${parts[1]}-${parts[0]}`;
+            } else if (typeof data.date === 'string' && /^\d{2}-\d{2}-\d{4}$/.test(data.date.trim())) {
+                formattedDate = data.date.trim();
+            } else {
+                const parsedDate = new Date(data.date);
+                if (!isNaN(parsedDate.getTime())) {
+                    formattedDate = format(parsedDate, 'dd-MM-yyyy');
+                }
+            }
+        } catch (e) {
+            formattedDate = String(data.date);
+        }
+    }
 
     const templateData = {
         ...data,
@@ -762,22 +810,34 @@ exports.submit = async (req, res) => {
         );
         const allowedDays = configResult.length > 0 ? configResult[0].allowed_days : 3;
 
-        // FIX: Use parseISO() instead of new Date() to treat date strings as local-time midnight.
-        // new Date("YYYY-MM-DD") parses as UTC midnight, which causes a +1 day shift when
-        // date-fns format() converts it to local time on servers behind UTC.
+        // Safely parse date strings (YYYY-MM-DD, DD-MM-YYYY, or ISO) to local midnight Date objects
         const safeParseDate = (dateStr) => {
             if (!dateStr) return new Date();
-            // If already a full ISO datetime string, use parseISO directly
-            if (typeof dateStr === 'string' && dateStr.length > 10) {
-                return parseISO(dateStr.slice(0, 10));
+            if (dateStr instanceof Date) return dateStr;
+            if (typeof dateStr === 'string') {
+                const s = dateStr.trim();
+                // If YYYY-MM-DD
+                const ymd = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if (ymd) {
+                    return new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+                }
+                // If DD-MM-YYYY
+                const dmy = s.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+                if (dmy) {
+                    return new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+                }
+                // Full ISO string with time
+                const parsed = new Date(s);
+                if (!isNaN(parsed.getTime())) return parsed;
             }
-            return parseISO(String(dateStr).slice(0, 10));
+            return new Date();
         };
 
         // Default SAP post date = today (so old records can be submitted without SAP back-date rejection)
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const postDateSource = sap_post_date ? safeParseDate(sap_post_date) : today;
+        const finalSapPostDate = format(postDateSource, 'yyyy-MM-dd');
 
         // Validate DC date exists
         const dcDate = safeParseDate(date);
@@ -815,87 +875,87 @@ exports.submit = async (req, res) => {
         const sap_format_date = format(postDateSource, 'dd-MM-yyyy');
         console.log(`[BOS Submit] doc_no=${doc_no} | sap_post_date input=${sap_post_date} | formatted=${sap_format_date} | rate from DB=${dbRate}`);
 
-/**
- * Resolves full names for a list of employee / user identifiers (username, emp_id, or id)
- * by querying public.driver and broiler.employee.
- */
-const resolveEmployeeFullNames = async (codes = []) => {
-    const rawCodes = codes.map(c => extractCodeOnly(c)).filter(Boolean);
-    if (rawCodes.length === 0) return {};
+        /**
+         * Resolves full names for a list of employee / user identifiers (username, emp_id, or id)
+         * by querying public.driver and broiler.employee.
+         */
+        const resolveEmployeeFullNames = async (codes = []) => {
+            const rawCodes = codes.map(c => extractCodeOnly(c)).filter(Boolean);
+            if (rawCodes.length === 0) return {};
 
-    const allCodes = [
-        ...rawCodes,
-        ...rawCodes.map(c => c.replace(/^0+/, '')),
-        ...rawCodes.map(c => c.padStart(8, '0'))
-    ];
-    const uniqueCodes = [...new Set(allCodes.filter(Boolean))];
-    const nameMap = {};
+            const allCodes = [
+                ...rawCodes,
+                ...rawCodes.map(c => c.replace(/^0+/, '')),
+                ...rawCodes.map(c => c.padStart(8, '0'))
+            ];
+            const uniqueCodes = [...new Set(allCodes.filter(Boolean))];
+            const nameMap = {};
 
-    try {
-        // 1. Query public.driver (username -> fullname, id -> fullname, emp_id -> fullname)
-        const driverRows = await query(
-            `SELECT id, username, fullname, emp_id FROM public.driver
+            try {
+                // 1. Query public.driver (username -> fullname, id -> fullname, emp_id -> fullname)
+                const driverRows = await query(
+                    `SELECT id, username, fullname, emp_id FROM public.driver
              WHERE lower(username) = ANY($1::text[])
                 OR lower(fullname) = ANY($1::text[])
                 OR id::text = ANY($2::text[])
                 OR emp_id = ANY($2::text[])`,
-            [uniqueCodes.map(c => c.toLowerCase()), uniqueCodes]
-        );
-        driverRows.forEach(d => {
-            const fn = String(d.fullname || '').trim();
-            if (!fn) return;
-            if (d.username) {
-                const u = String(d.username).trim().toLowerCase();
-                nameMap[u] = fn;
+                    [uniqueCodes.map(c => c.toLowerCase()), uniqueCodes]
+                );
+                driverRows.forEach(d => {
+                    const fn = String(d.fullname || '').trim();
+                    if (!fn) return;
+                    if (d.username) {
+                        const u = String(d.username).trim().toLowerCase();
+                        nameMap[u] = fn;
+                    }
+                    if (d.id) {
+                        const id = String(d.id).trim().toLowerCase();
+                        nameMap[id] = fn;
+                    }
+                    if (d.emp_id) {
+                        const eid = String(d.emp_id).trim().toLowerCase();
+                        nameMap[eid] = fn;
+                        nameMap[eid.replace(/^0+/, '')] = fn;
+                        nameMap[eid.padStart(8, '0')] = fn;
+                    }
+                });
+            } catch (dErr) {
+                console.warn('Driver table lookup warning:', dErr.message);
             }
-            if (d.id) {
-                const id = String(d.id).trim().toLowerCase();
-                nameMap[id] = fn;
-            }
-            if (d.emp_id) {
-                const eid = String(d.emp_id).trim().toLowerCase();
-                nameMap[eid] = fn;
-                nameMap[eid.replace(/^0+/, '')] = fn;
-                nameMap[eid.padStart(8, '0')] = fn;
-            }
-        });
-    } catch (dErr) {
-        console.warn('Driver table lookup warning:', dErr.message);
-    }
 
-    try {
-        // 2. Query broiler.employee (emp_id -> emp_name)
-        const empRows = await query(
-            `SELECT emp_id, emp_name FROM broiler.employee
+            try {
+                // 2. Query broiler.employee (emp_id -> emp_name)
+                const empRows = await query(
+                    `SELECT emp_id, emp_name FROM broiler.employee
              WHERE emp_id = ANY($1::text[]) OR lower(emp_name) = ANY($2::text[])`,
-            [uniqueCodes, uniqueCodes.map(c => c.toLowerCase())]
-        );
-        empRows.forEach(e => {
-            const id = String(e.emp_id || '').trim();
-            const name = String(e.emp_name || '').trim();
-            if (id && name) {
-                const idLower = id.toLowerCase();
-                if (!nameMap[idLower]) nameMap[idLower] = name;
-                if (!nameMap[idLower.replace(/^0+/, '')]) nameMap[idLower.replace(/^0+/, '')] = name;
-                if (!nameMap[idLower.padStart(8, '0')]) nameMap[idLower.padStart(8, '0')] = name;
+                    [uniqueCodes, uniqueCodes.map(c => c.toLowerCase())]
+                );
+                empRows.forEach(e => {
+                    const id = String(e.emp_id || '').trim();
+                    const name = String(e.emp_name || '').trim();
+                    if (id && name) {
+                        const idLower = id.toLowerCase();
+                        if (!nameMap[idLower]) nameMap[idLower] = name;
+                        if (!nameMap[idLower.replace(/^0+/, '')]) nameMap[idLower.replace(/^0+/, '')] = name;
+                        if (!nameMap[idLower.padStart(8, '0')]) nameMap[idLower.padStart(8, '0')] = name;
+                    }
+                    if (name && !nameMap[name.toLowerCase()]) {
+                        nameMap[name.toLowerCase()] = name;
+                    }
+                });
+            } catch (eErr) {
+                console.warn('Employee table lookup warning:', eErr.message);
             }
-            if (name && !nameMap[name.toLowerCase()]) {
-                nameMap[name.toLowerCase()] = name;
-            }
-        });
-    } catch (eErr) {
-        console.warn('Employee table lookup warning:', eErr.message);
-    }
 
-    return nameMap;
-};
+            return nameMap;
+        };
 
         // --- Lookup employee names for order_by / dispatch_by ---
-        const orderByCleanCode    = extractCodeOnly(rest.order_by);
+        const orderByCleanCode = extractCodeOnly(rest.order_by);
         const dispatchByCleanCode = extractCodeOnly(rest.dispatch_by);
 
         // 1. Direct extraction from "Code - Name" string if present
-        let order_by_name    = extractNameOnly(rest.order_by);
+        let order_by_name = extractNameOnly(rest.order_by);
         let dispatch_by_name = extractNameOnly(rest.dispatch_by);
 
         // If rest already has a custom name that is NOT just the code/username
@@ -919,7 +979,7 @@ const resolveEmployeeFullNames = async (codes = []) => {
                         || '';
                 };
 
-                if (!order_by_name && orderByCleanCode)       order_by_name    = getName(orderByCleanCode);
+                if (!order_by_name && orderByCleanCode) order_by_name = getName(orderByCleanCode);
                 if (!dispatch_by_name && dispatchByCleanCode) dispatch_by_name = getName(dispatchByCleanCode);
 
                 // 3. Fallback: plant default employee codes from sales_emp_default
@@ -930,7 +990,7 @@ const resolveEmployeeFullNames = async (codes = []) => {
                             [String(rest.plant)]
                         );
                         if (empDefRows.length > 0) {
-                            const defOrderCode    = extractCodeOnly(empDefRows[0].ordered_by);
+                            const defOrderCode = extractCodeOnly(empDefRows[0].ordered_by);
                             const defDispatchCode = extractCodeOnly(empDefRows[0].dispatched_by);
                             const defNames = await resolveEmployeeFullNames([defOrderCode, defDispatchCode]);
                             if (!order_by_name && defOrderCode) {
@@ -1007,7 +1067,7 @@ const resolveEmployeeFullNames = async (codes = []) => {
                 const farmerCodeForLookup = extractCodeOnly(rest.farmer);
                 const customerCodeForLookup = extractCodeOnly(rest.customer);
                 const contactInfo = await fetchSapContactInfo(farmerCodeForLookup, customerCodeForLookup);
-                if (contactInfo?.farmerName)   farmer_name   = contactInfo.farmerName;
+                if (contactInfo?.farmerName) farmer_name = contactInfo.farmerName;
                 if (contactInfo?.customerName) customer_name = contactInfo.customerName;
                 console.log(`[BOS Submit] SAP lookup resolved: farmer_name="${farmer_name}", customer_name="${customer_name}"`);
             } catch (fErr) {
@@ -1046,9 +1106,9 @@ const resolveEmployeeFullNames = async (codes = []) => {
         }
 
         // Final fallbacks — use name from "Code - Name" or code only if name could not be resolved
-        if (!farmer_name)   farmer_name   = extractNameOnly(rest.farmer)   || extractCodeOnly(rest.farmer)   || '';
+        if (!farmer_name) farmer_name = extractNameOnly(rest.farmer) || extractCodeOnly(rest.farmer) || '';
         if (!customer_name) customer_name = extractNameOnly(rest.customer) || extractCodeOnly(rest.customer) || '';
-        if (!order_by_name && rest.order_by)       order_by_name    = extractNameOnly(rest.order_by)    || extractCodeOnly(rest.order_by);
+        if (!order_by_name && rest.order_by) order_by_name = extractNameOnly(rest.order_by) || extractCodeOnly(rest.order_by);
         if (!dispatch_by_name && rest.dispatch_by) dispatch_by_name = extractNameOnly(rest.dispatch_by) || extractCodeOnly(rest.dispatch_by);
 
         // Strip leading zeros from dc_no before sending to SAP
@@ -1099,7 +1159,14 @@ const resolveEmployeeFullNames = async (codes = []) => {
             const responses = await Promise.allSettled(requests);
 
             const failed = responses.find(r => r.status === 'rejected');
-
+            console.log("======================================================");
+            console.log("======================================================");
+            console.log("======================================================");
+            console.log(responses);
+            console.log("======================================================");
+            console.log("======================================================");
+            console.log("======================================================");
+            
             if (failed) {
                 const err = failed.reason;
                 const isNetworkError = !err?.response; // No HTTP response = network/connection issue
@@ -1195,16 +1262,16 @@ const resolveEmployeeFullNames = async (codes = []) => {
             farmer_name,
             customer_name,
             line_no_name,
-            sap_post_date
+            sap_post_date: finalSapPostDate
         }, doc_no);
 
         await query(
             `UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}
              SET pdf_link = $1, sap_post_date = $2, is_send_sap = true, updated_at = CURRENT_TIMESTAMP
              WHERE doc_no = $3`,
-            [publicUrl, sap_post_date || null, doc_no]
+            [publicUrl, finalSapPostDate, doc_no]
         );
-
+    
         return res.status(200).json({
             status: true,
             message: "Bill of supply submitted to SAP and PDF generated successfully",
@@ -1337,70 +1404,72 @@ exports.getAll = async (req, res) => {
                 try { raw = JSON.parse(raw); } catch { raw = {}; }
             }
 
-            // Parse customer_details (stored by mobile in raw_data)
-            let customerDetails = raw.customer_details || {};
-            if (typeof customerDetails === 'string') {
-                try { customerDetails = JSON.parse(customerDetails); } catch { customerDetails = {}; }
-            }
+                // Parse customer_details (stored by mobile in raw_data)
+                let customerDetails = raw.customer_details || {};
+                if (typeof customerDetails === 'string') {
+                    try { customerDetails = JSON.parse(customerDetails); } catch { customerDetails = {}; }
+                }
 
-            // Parse farmer_details (stored by mobile in raw_data)
-            let farmerDetails = raw.farmer_details || {};
-            if (typeof farmerDetails === 'string') {
-                try { farmerDetails = JSON.parse(farmerDetails); } catch { farmerDetails = {}; }
-            }
+                // Parse farmer_details (stored by mobile in raw_data)
+                let farmerDetails = raw.farmer_details || {};
+                if (typeof farmerDetails === 'string') {
+                    try { farmerDetails = JSON.parse(farmerDetails); } catch { farmerDetails = {}; }
+                }
 
-            const effectiveCustomer = row.customer || raw.customer || customerDetails.customer_no || null;
-            const effectiveFarmer = row.farmer || raw.farmer || farmerDetails.farmer_supplier || null;
+                const effectiveCustomer = row.customer || raw.customer || customerDetails.customer_no || null;
+                const effectiveFarmer = row.farmer || raw.farmer || farmerDetails.farmer_supplier || null;
 
-            // Resolve customer name — SAP map first, DB map, raw_data.customer_details, raw_data direct, then code
-            const customer_name =
-                (effectiveCustomer ? customerSapMap[effectiveCustomer] : null) ||
-                (effectiveCustomer ? dbNameMap[effectiveCustomer] : null) ||
-                customerDetails.customer_name ||
-                customerDetails.name1 ||
-                raw.customer_name ||
-                effectiveCustomer ||
-                null;
+                // Resolve customer name — SAP map first, DB map, raw_data.customer_details, raw_data direct, then code
+                const customer_name =
+                    (effectiveCustomer ? customerSapMap[effectiveCustomer] : null) ||
+                    (effectiveCustomer ? dbNameMap[effectiveCustomer] : null) ||
+                    customerDetails.customer_name ||
+                    customerDetails.name1 ||
+                    raw.customer_name ||
+                    effectiveCustomer ||
+                    null;
 
-            // Resolve farmer name — SAP map first, DB map, raw_data.farmer_details, raw_data direct, then code
-            const farmer_name =
-                (effectiveFarmer ? customerSapMap[effectiveFarmer] : null) ||
-                (effectiveFarmer ? dbNameMap[effectiveFarmer] : null) ||
-                farmerDetails.farmer_name ||
-                farmerDetails.name1 ||
-                raw.farmer_name ||
-                effectiveFarmer ||
-                null;
+                // Resolve farmer name — SAP map first, DB map, raw_data.farmer_details, raw_data direct, then code
+                const farmer_name =
+                    (effectiveFarmer ? customerSapMap[effectiveFarmer] : null) ||
+                    (effectiveFarmer ? dbNameMap[effectiveFarmer] : null) ||
+                    farmerDetails.farmer_name ||
+                    farmerDetails.name1 ||
+                    raw.farmer_name ||
+                    effectiveFarmer ||
+                    null;
 
-            // Resolve plant name
-            const plant_name =
-                plantMap[String(row.plant || '')] ||
-                raw.plant_name ||
-                row.plant ||
-                null;
+                // Resolve plant name
+                const plant_name =
+                    plantMap[String(row.plant || '')] ||
+                    raw.plant_name ||
+                    row.plant ||
+                    null;
 
-            console.log(`[getAll] doc_no=${row.doc_no} | customer=${row.customer} | customer_name resolved="${customer_name}" | farmer=${row.farmer} | farmer_name resolved="${farmer_name}"`);
+                console.log(`[getAll] doc_no=${row.doc_no} | customer=${row.customer} | customer_name resolved="${customer_name}" | farmer=${row.farmer} | farmer_name resolved="${farmer_name}"`);
 
-            // Resolve order_by and dispatch_by names
-            const cleanOrderBy = extractCodeOnly(row.order_by || raw.order_by);
-            const cleanDispBy = extractCodeOnly(row.dispatch_by || raw.dispatch_by);
+                // Resolve order_by and dispatch_by names
+                const cleanOrderBy = extractCodeOnly(row.order_by || raw.order_by);
+                const cleanDispBy = extractCodeOnly(row.dispatch_by || raw.dispatch_by);
 
-            const order_by_name =
-                extractNameOnly(row.order_by || raw.order_by) ||
-                (raw.order_by_name && raw.order_by_name.trim().toLowerCase() !== cleanOrderBy.toLowerCase() ? raw.order_by_name : null) ||
-                (cleanOrderBy ? userFullnameMap[cleanOrderBy.toLowerCase()] : null) ||
-                cleanOrderBy ||
-                null;
+                const order_by_name =
+                    extractNameOnly(row.order_by || raw.order_by) ||
+                    (raw.order_by_name && raw.order_by_name.trim().toLowerCase() !== cleanOrderBy.toLowerCase() ? raw.order_by_name : null) ||
+                    (cleanOrderBy ? userFullnameMap[cleanOrderBy.toLowerCase()] : null) ||
+                    cleanOrderBy ||
+                    null;
 
-            const dispatch_by_name =
-                extractNameOnly(row.dispatch_by || raw.dispatch_by) ||
-                (raw.dispatch_by_name && raw.dispatch_by_name.trim().toLowerCase() !== cleanDispBy.toLowerCase() ? raw.dispatch_by_name : null) ||
-                (cleanDispBy ? userFullnameMap[cleanDispBy.toLowerCase()] : null) ||
+                const dispatch_by_name =
+                    extractNameOnly(row.dispatch_by || raw.dispatch_by) ||
+                    (raw.dispatch_by_name && raw.dispatch_by_name.trim().toLowerCase() !== cleanDispBy.toLowerCase() ? raw.dispatch_by_name : null) ||
+                    (cleanDispBy ? userFullnameMap[cleanDispBy.toLowerCase()] : null) ||
                 cleanDispBy ||
                 null;
 
             return {
                 ...row,
+                date: formatDateToYMD(row.date),
+                sap_post_date: formatDateToYMD(row.sap_post_date),
                 customer_name,
                 farmer_name,
                 plant_name,
@@ -1430,7 +1499,11 @@ exports.getOne = async (req, res) => {
             return res.status(404).json({ status: false, message: `Broiler supply record with ID ${id} not found` });
         }
 
-        res.status(200).json({ status: true, data: result[0] });
+        const record = result[0];
+        if (record.date) record.date = formatDateToYMD(record.date);
+        if (record.sap_post_date) record.sap_post_date = formatDateToYMD(record.sap_post_date);
+
+        res.status(200).json({ status: true, data: record });
 
     } catch (error) {
         console.error("Error fetching single Broiler supply record:", error);
@@ -1726,65 +1799,65 @@ exports.getDraftById = async (req, res) => {
 };
 
 exports.completeDraft = async (req, res) => {
-try {
+    try {
 
-    const { id } = req.params;
-    const data = req.body;
+        const { id } = req.params;
+        const data = req.body;
 
-    const checkDraft = await query(
-        `SELECT * FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable} WHERE id = $1 LIMIT 1`,
-        [id]
-    );
+        const checkDraft = await query(
+            `SELECT * FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable} WHERE id = $1 LIMIT 1`,
+            [id]
+        );
 
-    if (!checkDraft || checkDraft.length === 0) {
-        return res.status(404).json({
-            status: false,
-            message: "Draft not found"
-        });
-    }
+        if (!checkDraft || checkDraft.length === 0) {
+            return res.status(404).json({
+                status: false,
+                message: "Draft not found"
+            });
+        }
 
-    if (checkDraft[0].status === 'COMPLETED') {
-        console.log(`BOS completeDraft: Draft ID "${id}" is already completed. Returning existing completed record.`);
-        const existingRec = checkDraft[0];
-        const pdfLink = existingRec.mobile_pdf_link || existingRec.pdf_link;
-        return res.status(200).json({
-            status: true,
-            doc_no: existingRec.doc_no,
-            pdfLink: pdfLink,
-            data: existingRec
-        });
-    }
+        if (checkDraft[0].status === 'COMPLETED') {
+            console.log(`BOS completeDraft: Draft ID "${id}" is already completed. Returning existing completed record.`);
+            const existingRec = checkDraft[0];
+            const pdfLink = existingRec.mobile_pdf_link || existingRec.pdf_link;
+            return res.status(200).json({
+                status: true,
+                doc_no: existingRec.doc_no,
+                pdfLink: pdfLink,
+                data: existingRec
+            });
+        }
 
-    if (!data.rate || Number(data.rate) <= 0) {
-    return res.status(400).json({
-        status: false,
-        message: "Rate is required"
-    });
-}
+        if (!data.rate || Number(data.rate) <= 0) {
+            return res.status(400).json({
+                status: false,
+                message: "Rate is required"
+            });
+        }
 
-const invalidLoad = (data.load_details || []).some(
-    item =>
-        item.birdQty !== undefined && item.birdQty !== null && item.birdQty !== '' && Number(item.birdQty) < 0
-);
+        const invalidLoad = (data.load_details || []).some(
+            item =>
+                item.birdQty !== undefined && item.birdQty !== null && item.birdQty !== '' && Number(item.birdQty) < 0
+        );
 
-if (invalidLoad) {
-    return res.status(400).json({
-        status: false,
-        message: "Bird count cannot be negative"
-    });
-}
-    const seqRes = await query(
-    `SELECT nextval('broiler.bill_of_supply_doc_seq') AS seq`
-);
+        if (invalidLoad) {
+            return res.status(400).json({
+                status: false,
+                message: "Bird count cannot be negative"
+            });
+        }
+        const seqRes = await query(
+            `SELECT nextval('broiler.bill_of_supply_doc_seq') AS seq`
+        );
 
-const doc_no = `BOS/DC/${seqRes[0].seq}`;
-     
+        const doc_no = `BOS/DC/${seqRes[0].seq}`;
 
-    const { gross_value, bill_value, average_weight } =
-        computeTotals(data.load_details);
 
-    const result = await query(
-        `
+        const { gross_value, bill_value, average_weight } =
+            computeTotals(data.load_details);
+
+        const result = await query(
+            `
         UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}
        SET
     load_details = $1,
@@ -1800,82 +1873,82 @@ const doc_no = `BOS/DC/${seqRes[0].seq}`;
         WHERE id = $8
         RETURNING *
         `,
-       [
-    JSON.stringify(data.load_details),
-    data.rate,
-    average_weight,
-    gross_value,
-    bill_value,
-    JSON.stringify(data),
-    doc_no,
-    id
-]
-    );
+            [
+                JSON.stringify(data.load_details),
+                data.rate,
+                average_weight,
+                gross_value,
+                bill_value,
+                JSON.stringify(data),
+                doc_no,
+                id
+            ]
+        );
 
-    if (!result.length) {
-        return res.status(404).json({
-            status: false,
-            message: "Draft not found"
-        });
-    }
+        if (!result.length) {
+            return res.status(404).json({
+                status: false,
+                message: "Draft not found"
+            });
+        }
 
-   
 
-    let updatedRecord = result[0];
 
-   const publicUrl = await generateBillOfSupplyPDF(
-    data,
-    doc_no
-);
+        let updatedRecord = result[0];
 
-await query(
-`
+        const publicUrl = await generateBillOfSupplyPDF(
+            data,
+            doc_no
+        );
+
+        await query(
+            `
 UPDATE broiler.${broilerDataEntry[TABLE_NAME].pgTable}
 SET
     mobile_pdf_link = $1,
     raw_data = $2
 WHERE id = $3
 `,
-[
-    publicUrl,
-    JSON.stringify({
-        ...data,
-        doc_no,
-        pdfLink: publicUrl,
-        status: 'COMPLETED'
-    }),
-    id
-]
-);
+            [
+                publicUrl,
+                JSON.stringify({
+                    ...data,
+                    doc_no,
+                    pdfLink: publicUrl,
+                    status: 'COMPLETED'
+                }),
+                id
+            ]
+        );
 
-// --- Send SMS asynchronously after draft completion (non-blocking) ---
+        // --- Send SMS asynchronously after draft completion (non-blocking) ---
         dispatchBosSmsAsync(data, 'completeDraft');
 
-const latestRecord = await query(
-`
+        const latestRecord = await query(
+            `
 SELECT *
 FROM broiler.${broilerDataEntry[TABLE_NAME].pgTable}
 WHERE id = $1
 LIMIT 1
 `,
-[id]
-);
+            [id]
+        );
 
-updatedRecord = latestRecord[0];
+        updatedRecord = latestRecord[0];
 
-  return res.status(200).json({
-    status: true,
-    doc_no,
-    pdfLink: publicUrl,
-    data: updatedRecord
-});
+        return res.status(200).json({
+            status: true,
+            doc_no,
+            pdfLink: publicUrl,
+            data: updatedRecord
+        });
 
-} catch (err) {
+    } catch (err) {
 
-    return res.status(500).json({
-        status: false,
-        error: err.message
-    });
-}
+        return res.status(500).json({
+            status: false,
+            error: err.message
+        });
+    }
 
 };
