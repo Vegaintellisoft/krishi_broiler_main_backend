@@ -481,7 +481,91 @@ exports.getEntries = async (req, res) => {
 
         const result = await query(sql, params);
 
-        res.status(200).json({ status: true, data: result || [] });
+        // ── Enrich with Line Information, Supervisor Names, and Farmer Names ──
+        let lineMaster = [];
+        try {
+            lineMaster = await query(`SELECT id, line_id, name, plant, farmer_ids, user_ids FROM broiler.farmer_line_master ORDER BY id DESC`);
+        } catch (e) {
+            console.warn("Could not query farmer_line_master:", e.message);
+        }
+
+        let userMap = {};
+        try {
+            const drivers = await query("SELECT username, fullname FROM public.driver");
+            drivers.forEach(d => {
+                if (d.username) userMap[String(d.username).trim().toLowerCase()] = d.fullname;
+            });
+            const admins = await query("SELECT username, first_name, last_name FROM public.admin");
+            admins.forEach(a => {
+                if (a.username) userMap[String(a.username).trim().toLowerCase()] = `${a.first_name || ''} ${a.last_name || ''}`.trim();
+            });
+        } catch (e) {
+            console.warn("Could not query driver/admin names:", e.message);
+        }
+
+        let farmerMap = {};
+        try {
+            const farmers = await query("SELECT farmer_id, farmer_name FROM broiler.farmer");
+            farmers.forEach(f => {
+                if (f.farmer_id) farmerMap[String(f.farmer_id).trim().toLowerCase()] = f.farmer_name;
+            });
+        } catch (e) {}
+
+        if (Object.keys(farmerMap).length === 0) {
+            try {
+                const farmers = await query("SELECT lifnr, name1 FROM public.farmers");
+                farmers.forEach(f => {
+                    if (f.lifnr) farmerMap[String(f.lifnr).trim().toLowerCase()] = f.name1;
+                });
+            } catch (e) {}
+        }
+
+        const parseArraySafe = (val) => {
+            if (!val) return [];
+            if (Array.isArray(val)) return val.map(String);
+            if (typeof val === 'string') {
+                try {
+                    const p = JSON.parse(val);
+                    if (Array.isArray(p)) return p.map(String);
+                } catch (_) {
+                    return val.split(',').map(s => s.trim()).filter(Boolean);
+                }
+            }
+            return [];
+        };
+
+        const enriched = (result || []).map(row => {
+            const farmerCode = String(row.farmer || '').trim().toLowerCase();
+            const uId = String(row.user_id || '').trim().toLowerCase();
+            const pId = String(row.plant || '').trim().toLowerCase();
+
+            // 1. Match Line by farmer_ids
+            let matchedLine = lineMaster.find(l => {
+                const fids = parseArraySafe(l.farmer_ids).map(f => f.trim().toLowerCase());
+                return fids.includes(farmerCode);
+            });
+
+            // 2. Fallback: Match Line by user_ids & plant
+            if (!matchedLine) {
+                matchedLine = lineMaster.find(l => {
+                    const uids = parseArraySafe(l.user_ids).map(u => u.trim().toLowerCase());
+                    const lPlant = String(l.plant || '').trim().toLowerCase();
+                    const matchesUser = uids.includes(uId);
+                    const matchesPlant = !pId || !lPlant || lPlant === pId;
+                    return matchesUser && matchesPlant;
+                });
+            }
+
+            return {
+                ...row,
+                line_id: matchedLine ? matchedLine.line_id : (row.line_id || null),
+                line_name: matchedLine ? matchedLine.name : (row.line_name || null),
+                user_name: userMap[uId] || row.user_name || row.user_id,
+                farmer_name: farmerMap[farmerCode] || row.farmer_name || row.farmer,
+            };
+        });
+
+        res.status(200).json({ status: true, data: enriched });
     } catch (error) {
         console.error("Error while fetching farm activity:", error);
         res.status(500).json({
