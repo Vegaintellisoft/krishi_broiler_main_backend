@@ -1260,24 +1260,29 @@ exports.generateChallanPDFByData = async (req, res) => {
 
         if (isEwayBill) {
 
+            const cleanFromGstin = (full_from_address.gst_in || '').trim();
+            const cleanToGstin = (full_address.gst_in || '').trim();
+            const cleanToCity = (full_address.city || '').replace(/,/g, '').trim();
+            const cleanFromCity = (full_from_address.city || '').replace(/,/g, '').trim();
+
             invoicePayload = {
                 "supplyType": "I", "subSupplyType": "5", "subSupplyDesc": "For Own Use", "docType": "CHL",
                 "docNo": doc_no,
                 "docDate": format(new Date(), 'dd/MM/yyyy'),
-                "fromGstin": full_from_address.gst_in,
-                "fromTrdName": full_from_address.company,
-                "fromAddr1": `${full_from_address.company}, ${full_from_address.street}`,
-                "fromAddr2": `${full_from_address.city}, ${full_from_address.state}, ${full_from_address.pincode}`,
-                "fromPlace": full_from_address.state,
-                "fromPincode": parseInt(full_from_address.pincode),
+                "fromGstin": cleanFromGstin,
+                "fromTrdName": (full_from_address.company || '').trim(),
+                "fromAddr1": `${full_from_address.company || ''}, ${full_from_address.street || ''}`.trim().replace(/^,\s*/, ''),
+                "fromAddr2": `${cleanFromCity}, ${full_from_address.state || ''}, ${full_from_address.pincode || ''}`.trim().replace(/^,\s*/, ''),
+                "fromPlace": (full_from_address.state || '').trim(),
+                "fromPincode": parseInt((full_from_address.pincode || '').toString().trim(), 10),
                 "actFromStateCode": getStateCodeByName(full_from_address.state),
                 "fromStateCode": getStateCodeByName(full_from_address.state),
-                "toGstin": full_address.gst_in,
-                "toTrdName": full_from_address.company,
-                "toAddr1": `${full_address.company}, ${full_address.door_no}`,
-                "toAddr2": `${full_address.street}, ${full_address.city}, ${full_address.state}, ${full_address.pincode}`,
-                "toPlace": full_address.city,
-                "toPincode": parseInt(full_address.pincode),
+                "toGstin": cleanToGstin,
+                "toTrdName": (full_from_address.company || full_address.company || '').trim(),
+                "toAddr1": `${full_address.company || ''}, ${full_address.door_no || ''}`.trim().replace(/^,\s*/, ''),
+                "toAddr2": `${full_address.street || ''}, ${cleanToCity}, ${full_address.state || ''}, ${full_address.pincode || ''}`.trim().replace(/^,\s*/, ''),
+                "toPlace": cleanToCity,
+                "toPincode": parseInt((full_address.pincode || '').toString().trim(), 10),
                 "actToStateCode": getStateCodeByName(full_address.state),
                 "toStateCode": getStateCodeByName(full_address.state),
                 "transactionType": 1,
@@ -1288,14 +1293,14 @@ exports.generateChallanPDFByData = async (req, res) => {
                 "igstValue": 0,
                 "cessValue": 0,
                 "cessNonAdvolValue": 0,
-                "totInvValue": Math.round(total_price),
+                "totInvValue": Math.round(Number(total_price)),
                 "transporterId": "",
                 "transporterName": "",
                 "transDocNo": `${doc_no}`,
                 "transMode": "1",
                 "transDistance": parseInt(dcData.distance) || 0,
                 "transDocDate": format(new Date(), 'dd/MM/yyyy'),
-                "vehicleNo": dcData.truck_no,
+                "vehicleNo": (dcData.truck_no || '').trim(),
                 "vehicleType": "R",
 
                 ItemList: finalMaterials.map(item => ({

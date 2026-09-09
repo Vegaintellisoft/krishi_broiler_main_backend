@@ -1,3 +1,30 @@
+
+const sanitizeAddress = (address) => {
+    const door_no = (address.door_no || '').trim();
+    const company = (address.company || '').trim();
+    const street = (address.street || '').trim();
+    const city = (address.city || '').replace(/,/g, '').trim();
+    const district = (address.district || '').trim();
+    const state = (address.state || '').trim();
+    const pincode = (address.pincode || '').toString().trim();
+    const gst_in = (address.gst_in || '').trim();
+
+    const parts = [door_no, company, street, city, district, state, pincode, gst_in];
+    const full_address = parts.filter(Boolean).join(", ");
+
+    return {
+        ...address,
+        door_no,
+        company,
+        street,
+        city,
+        district,
+        state,
+        pincode,
+        gst_in,
+        full_address
+    };
+};
 const { query } = require("../config/db");
 
 exports.getAll = async (req, res) => {
@@ -25,20 +52,8 @@ exports.addShipping = async (req, res) => {
             message: "Missing required fields: sap_code, sap_name, address",
         });
     }
-    const { door_no, company, street, city, district, state, pincode, gst_in } = address;
-
-    if (!city || !state) {
-        return res.status(400).json({
-            status: false,
-            message: "Address is incomplete. Missing fields in address.",
-        });
-    }
-    const parts = [door_no, company, street, city, district, state, pincode, gst_in];
-    // console.log(parts)
-
-    const full_address = parts.filter(Boolean).join(", ");
-
-    const shippingAddress = { ...address, full_address };
+    const shippingAddress = sanitizeAddress(address);
+    const { city, state } = shippingAddress;
 
     // console.log(shippingAddress)
 
@@ -77,21 +92,8 @@ exports.updateShipping = async (req, res) => {
         });
     }
 
-    const { door_no, company, street, city, district, state, pincode, gst_in } = address;
-
-    if (!city || !state) {
-        return res.status(400).json({
-            status: false,
-            message: "Address is incomplete. Missing fields in address.",
-        });
-    }
-
-    const parts = [door_no, company, street, city, district, state, pincode, gst_in];
-    // console.log(parts)
-
-    const full_address = parts.filter(Boolean).join(", ");
-
-    const shippingAddress = { ...address, full_address };
+    const shippingAddress = sanitizeAddress(address);
+    const { city, state } = shippingAddress;
 
     // console.log(shippingAddress)
 
