@@ -43,7 +43,7 @@ exports.create = async (req, res) => {
         // add formated datae to databse here
 
         const { plant, farmer, dc_no, batch, chick_house_quantity, remarks } = data;
-        const user_id = "test"
+        const user_id = data.user_id || req.body.user_id;
 
         const insertQuery = `
             INSERT INTO broiler.${broilerDataEntry[TABLE_NAME].pgTable} (

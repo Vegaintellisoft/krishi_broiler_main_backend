@@ -43,7 +43,7 @@ exports.create = async (req, res) => {
             }
     
             const { plant, farmer, batch, birdStock, material ,quantity } = req.body;
-            const user_id = "test"
+            const user_id = req.body.user_id || "unknown";
     
              const insertQuery = `
                 INSERT INTO broiler.${broilerDataEntry[TABLE_NAME].pgTable} (
