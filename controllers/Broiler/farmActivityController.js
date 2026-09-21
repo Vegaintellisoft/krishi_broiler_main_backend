@@ -103,6 +103,7 @@ const FARM_ACTIVITY_COLUMNS = [
 
     "mortality",
     "upload_mortality",
+    "upload_material",
     "reason",
     "treatment",
     "cum_mortality_count",
@@ -203,7 +204,20 @@ exports.create = async (req, res) => {
         updatedData.date = formattedDate;
         updatedData.sap_status = false;
         updatedData.user_id = user_id;
-        if (updatedData.upload_mortality) updatedData.upload_mortality = saveBase64Photos(updatedData.upload_mortality, "mortality");
+        // If upload_mortality is an empty array "[]", keep it as-is; only process if it has actual photos
+        if (updatedData.upload_mortality) {
+            const parsedMort = (() => { try { const p = JSON.parse(updatedData.upload_mortality); return Array.isArray(p) ? p : null; } catch(_){ return null; } })();
+            if (parsedMort && parsedMort.length > 0) {
+                updatedData.upload_mortality = saveBase64Photos(updatedData.upload_mortality, "mortality");
+            }
+            // If empty array, keep as "[]" � this is valid when mortality = 0
+        }
+        if (updatedData.upload_material) {
+            const parsedMat = (() => { try { const p = JSON.parse(updatedData.upload_material); return Array.isArray(p) ? p : null; } catch(_){ return null; } })();
+            if (parsedMat && parsedMat.length > 0) {
+                updatedData.upload_material = saveBase64Photos(updatedData.upload_material, "material");
+            }
+        }
         if (updatedData.upload_start_km) updatedData.upload_start_km = saveBase64Photos(updatedData.upload_start_km, "start_km");
         if (updatedData.upload_end_km) updatedData.upload_end_km = saveBase64Photos(updatedData.upload_end_km, "end_km");
 

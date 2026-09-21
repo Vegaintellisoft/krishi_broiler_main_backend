@@ -793,11 +793,25 @@ exports.getAdminSummary = async (req, res) => {
                 (SELECT COUNT(*) FROM delivery_challan ${dateFilter ? `${dateFilter} AND status != 1` : 'WHERE status != 1'}) AS pending_delivery_challans,
                 (SELECT COUNT(*) FROM supplier) AS total_suppliers,
                 (SELECT COUNT(*) FROM material WHERE status = 1) AS active_materials,
+                (SELECT COUNT(*) FROM material) AS total_materials,
                 (
-                    SELECT COUNT(DISTINCT truck_no)
+                    SELECT COUNT(DISTINCT UPPER(TRIM(truck_no)))
                     FROM delivery_challan
-                    ${dateFilter}
-                ) AS trucks_used_today
+                    WHERE truck_no IS NOT NULL AND TRIM(truck_no) != ''
+                    ${from && to ? `AND DATE(created_at) BETWEEN '${from}' AND '${to}'` : ''}
+                ) AS trucks_used_today,
+                (
+                    SELECT COUNT(DISTINCT UPPER(TRIM(truck_no)))
+                    FROM delivery_challan
+                    WHERE truck_no IS NOT NULL AND TRIM(truck_no) != ''
+                    ${from && to ? `AND DATE(created_at) BETWEEN '${from}' AND '${to}'` : ''}
+                ) AS trucks_used,
+                (
+                    SELECT COUNT(*)
+                    FROM delivery_challan
+                    WHERE truck_no IS NOT NULL AND TRIM(truck_no) != ''
+                    ${from && to ? `AND DATE(created_at) BETWEEN '${from}' AND '${to}'` : ''}
+                ) AS total_truck_trips
         `;
 
         // Line Chart: Daily Challan Counts
@@ -1055,12 +1069,117 @@ exports.getBroilerDashboardReport = async (req, res) => {
         `;
         const loginDetails = await query(loginDetailsQuery, [fromDate, toDate]);
 
+        // 4. Daily Trip & Travel details (Start KM & End KM per user per day)
+        const serverBaseUrl = (process.env.SERVER_URL || '').replace(/\/+$/, '');
+        const parsePhotoUrl = (rawPhotos, defaultName = 'photo.jpg') => {
+            if (typeof rawPhotos === 'string') {
+                try { rawPhotos = JSON.parse(rawPhotos); } catch (_) { rawPhotos = rawPhotos ? [rawPhotos] : []; }
+            }
+            if (rawPhotos && !Array.isArray(rawPhotos) && typeof rawPhotos === 'object') rawPhotos = [rawPhotos];
+            else if (!Array.isArray(rawPhotos)) rawPhotos = rawPhotos ? [rawPhotos] : [];
+
+            return rawPhotos.map(photo => {
+                if (typeof photo === 'string') {
+                    if (photo.startsWith('http://') || photo.startsWith('https://') || photo.startsWith('data:')) {
+                        return { url: photo, name: photo.split('/').pop() || defaultName };
+                    }
+                    const cleanPath = photo.replace(/^\/+/, '');
+                    return { url: serverBaseUrl ? `${serverBaseUrl}/${cleanPath}` : `/${cleanPath}`, name: cleanPath.split('/').pop() || defaultName };
+                }
+                if (photo && typeof photo === 'object') {
+                    let photoUrl = photo.url || photo.path || photo.publicUrl || '';
+                    if (!photoUrl && photo.base64) photoUrl = photo.base64.startsWith('data:') ? photo.base64 : `data:image/jpeg;base64,${photo.base64}`;
+                    if (!photoUrl && photo.fileName) photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${photo.fileName}` : `/uploads/broiler/${photo.fileName}`;
+                    if (!photoUrl && photo.uri) {
+                        if (photo.uri.startsWith('http://') || photo.uri.startsWith('https://') || photo.uri.startsWith('data:')) photoUrl = photo.uri;
+                        else {
+                            const fname = photo.fileName || photo.uri.split('/').pop();
+                            if (fname) photoUrl = serverBaseUrl ? `${serverBaseUrl}/uploads/broiler/${fname}` : `/uploads/broiler/${fname}`;
+                        }
+                    }
+                    return { ...photo, url: photoUrl, name: photo.fileName || photo.name || defaultName, fileSize: photo.fileSize || photo.size, width: photo.width, height: photo.height, type: photo.type || 'image/jpeg' };
+                }
+                return null;
+            }).filter(Boolean);
+        };
+
+        const tripDetailsQuery = `
+            SELECT 
+                ${groupingSql},
+                fa.user_id,
+                fa.plant,
+                COALESCE(NULLIF(TRIM(fa.vehicle_no), ''), '-') AS vehicle_no,
+                NULLIF(TRIM(fa.start_km::text), '') AS start_km,
+                NULLIF(TRIM(fa.end_km::text), '') AS end_km,
+                NULLIF(TRIM(fa.in_time::text), '') AS in_time,
+                NULLIF(TRIM(fa.out_time::text), '') AS out_time,
+                fa.upload_start_km,
+                fa.upload_end_km,
+                fa.farmer,
+                fa.created_at
+            FROM broiler.farm_activity fa
+            WHERE fa.date::date BETWEEN $1::date AND $2::date
+              AND (
+                (fa.start_km IS NOT NULL AND TRIM(fa.start_km::text) != '' AND fa.start_km::text != '0' AND fa.start_km::text != '0.00')
+                OR (fa.end_km IS NOT NULL AND TRIM(fa.end_km::text) != '' AND fa.end_km::text != '0' AND fa.end_km::text != '0.00')
+                OR (fa.vehicle_no IS NOT NULL AND TRIM(fa.vehicle_no) != '' AND fa.vehicle_no != '-')
+                OR (fa.upload_start_km IS NOT NULL AND fa.upload_start_km::text != '[]')
+                OR (fa.upload_end_km IS NOT NULL AND fa.upload_end_km::text != '[]')
+              )
+            ORDER BY period_date DESC, fa.user_id ASC, fa.created_at DESC;
+        `;
+        const rawTripRows = await query(tripDetailsQuery, [fromDate, toDate]);
+
+        // Deduplicate per (period_date, user_id): 1 trip record per user per day
+        const tripMap = new Map();
+        rawTripRows.forEach(row => {
+            const key = `${row.period_date}_${String(row.user_id || '').toLowerCase()}`;
+            const farmerCode = (row.farmer || '').trim();
+
+            if (!tripMap.has(key)) {
+                const uId = String(row.user_id || '').trim().toLowerCase();
+                const startKmPhotos = parsePhotoUrl(row.upload_start_km, 'start_km_photo.jpg');
+                const endKmPhotos = parsePhotoUrl(row.upload_end_km, 'end_km_photo.jpg');
+                const numStart = Number(row.start_km);
+                const numEnd = Number(row.end_km);
+                const runningKm = (row.start_km && row.end_km && numEnd > 0)
+                    ? (numEnd >= numStart ? (numEnd - numStart).toFixed(2) : Math.abs(numEnd - numStart).toFixed(2))
+                    : null;
+
+                tripMap.set(key, {
+                    period_date: row.period_date,
+                    user_id: row.user_id,
+                    user_display_name: userMap[uId] || row.user_id || 'Unknown',
+                    plant: row.plant,
+                    plant_name: plantMap[String(row.plant).trim()] || row.plant || '-',
+                    vehicle_no: row.vehicle_no || '-',
+                    start_km: row.start_km || null,
+                    end_km: row.end_km || null,
+                    running_km: runningKm,
+                    in_time: row.in_time || null,
+                    out_time: row.out_time || null,
+                    start_km_photos: startKmPhotos,
+                    start_km_photo_url: startKmPhotos.length > 0 ? startKmPhotos[0].url : null,
+                    end_km_photos: endKmPhotos,
+                    end_km_photo_url: endKmPhotos.length > 0 ? endKmPhotos[0].url : null,
+                    farms: farmerCode ? [farmerCode] : [],
+                });
+            } else {
+                const existing = tripMap.get(key);
+                if (farmerCode && !existing.farms.includes(farmerCode)) {
+                    existing.farms.push(farmerCode);
+                }
+            }
+        });
+        const enrichedTripDetails = Array.from(tripMap.values());
+
         res.status(200).json({
             status: true,
             data: {
                 summary,
                 reportDetails: enrichedReportDetails,
                 loginDetails,
+                tripDetails: enrichedTripDetails,
                 available_mortality_reasons: (await query(`SELECT DISTINCT NULLIF(TRIM(reason), '') AS reason FROM broiler.farm_activity WHERE date::date BETWEEN $1::date AND $2::date AND reason IS NOT NULL AND TRIM(reason) != '' ORDER BY reason ASC`, [fromDate, toDate])).map(r => r.reason).filter(Boolean),
                 fromDate,
                 toDate,
@@ -1154,7 +1273,8 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 fa.user_id,
                 fa.sap_status,
                 fa.created_at,
-                fa.materials
+                fa.materials,
+                fa.upload_material
             FROM broiler.farm_activity fa
             WHERE ${dateCondition} AND fa.plant::text = $2::text ${farmReasonFilterSql}
             ORDER BY fa.farmer ASC, fa.created_at DESC
@@ -1274,6 +1394,9 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
         }
 
         // Enrich entries with display names
+        // Track first entry per user_id for trip-level photos (start_km, end_km)
+        // A driver visits multiple farms per day -- start/end KM photo is per trip (per user per day), not per farm
+        const seenTripUsers = new Set();
         const enrichedEntries = entries.map(entry => {
             const userId = entry.user_id ? String(entry.user_id).trim().toLowerCase() : '';
             const fullname = userMap[userId];
@@ -1356,8 +1479,18 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
             };
 
             const mortalityPhotos = formatPhotoArray(entry.upload_mortality, 'mortality_photo.jpg');
-            const startKmPhotos = formatPhotoArray(entry.upload_start_km, 'start_km_photo.jpg');
-            const endKmPhotos = formatPhotoArray(entry.upload_end_km, 'end_km_photo.jpg');
+            const materialPhotos = formatPhotoArray(entry.upload_material, 'material_photo.jpg');
+
+            // Start KM and End KM are trip-level (one per user per day).
+            // Only assign them to the FIRST entry for this user to avoid duplication.
+            const tripUserKey = (entry.user_id || '').trim().toLowerCase();
+            const isFirstTripEntry = !seenTripUsers.has(tripUserKey);
+            if (tripUserKey) seenTripUsers.add(tripUserKey);
+
+            const startKmPhotos = isFirstTripEntry ? formatPhotoArray(entry.upload_start_km, 'start_km_photo.jpg') : [];
+            const endKmPhotos = isFirstTripEntry ? formatPhotoArray(entry.upload_end_km, 'end_km_photo.jpg') : [];
+            const startKmVal = isFirstTripEntry ? (entry.start_km || null) : null;
+            const endKmVal = isFirstTripEntry ? (entry.end_km || null) : null;
 
             return {
                 ...entry,
@@ -1365,10 +1498,18 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 farmer_name: farmerName,
                 photos: mortalityPhotos,
                 photo_url: mortalityPhotos.length > 0 ? mortalityPhotos[0].url : null,
+                material_photos: materialPhotos,
+                material_photo_url: materialPhotos.length > 0 ? materialPhotos[0].url : null,
                 start_km_photos: startKmPhotos,
                 start_km_photo_url: startKmPhotos.length > 0 ? startKmPhotos[0].url : null,
                 end_km_photos: endKmPhotos,
                 end_km_photo_url: endKmPhotos.length > 0 ? endKmPhotos[0].url : null,
+                start_km: startKmVal,
+                end_km: endKmVal,
+                // Null out raw fields for non-first-trip entries so frontend doesn't show duplicated KM photos
+                upload_start_km: isFirstTripEntry ? entry.upload_start_km : null,
+                upload_end_km: isFirstTripEntry ? entry.upload_end_km : null,
+                is_first_trip_entry: isFirstTripEntry,
             };
         });
 
@@ -1418,22 +1559,33 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
             }).filter(Boolean);
         };
 
-        const firstWithKm = entries.find(e => e.start_km || e.end_km || e.vehicle_no || e.upload_start_km || e.upload_end_km) || entries[0] || {};
-        const tripStartPhotos = formatPhotoArrayTrip(firstWithKm.upload_start_km, 'start_km_photo.jpg');
-        const tripEndPhotos = formatPhotoArrayTrip(firstWithKm.upload_end_km, 'end_km_photo.jpg');
+        // Build trip_drivers: one entry per unique user, with their trip-level KM data
+        const trip_drivers = enrichedEntries
+            .filter(e => e.is_first_trip_entry)
+            .map(e => {
+                const startKmPhotos = e.start_km_photos || [];
+                const endKmPhotos = e.end_km_photos || [];
+                const runningKm = (e.start_km && e.end_km)
+                    ? (Number(e.end_km) - Number(e.start_km)).toFixed(2)
+                    : (e.running_km || null);
+                return {
+                    user_id: e.user_id,
+                    user_display_name: e.user_display_name || e.user_id || 'Unknown',
+                    vehicle_no: e.vehicle_no || '-',
+                    start_km: e.start_km || null,
+                    end_km: e.end_km || null,
+                    running_km: runningKm,
+                    in_time: e.in_time || null,
+                    out_time: e.out_time || null,
+                    start_km_photos: startKmPhotos,
+                    start_km_photo_url: startKmPhotos.length > 0 ? startKmPhotos[0].url : null,
+                    end_km_photos: endKmPhotos,
+                    end_km_photo_url: endKmPhotos.length > 0 ? endKmPhotos[0].url : null,
+                };
+            });
 
-        const tripInfo = {
-            vehicle_no: firstWithKm.vehicle_no || '-',
-            start_km: firstWithKm.start_km || null,
-            end_km: firstWithKm.end_km || null,
-            running_km: firstWithKm.running_km || (firstWithKm.start_km && firstWithKm.end_km ? (Number(firstWithKm.end_km) - Number(firstWithKm.start_km)).toFixed(2) : null),
-            start_km_photos: tripStartPhotos,
-            start_km_photo_url: tripStartPhotos.length > 0 ? tripStartPhotos[0].url : null,
-            end_km_photos: tripEndPhotos,
-            end_km_photo_url: tripEndPhotos.length > 0 ? tripEndPhotos[0].url : null,
-            in_time: firstWithKm.in_time || null,
-            out_time: firstWithKm.out_time || null,
-        };
+        // Keep legacy tripInfo for backward compat (first driver)
+        const tripInfo = trip_drivers.length > 0 ? trip_drivers[0] : {};
 
         res.status(200).json({
             status: true,
@@ -1443,6 +1595,7 @@ exports.getBroilerFarmActivityDetails = async (req, res) => {
                 date,
                 summary: summaryStats,
                 trip: tripInfo,
+                trip_drivers: trip_drivers,
                 entries: enrichedEntries
             }
         });
@@ -1593,6 +1746,174 @@ exports.getBroilerLoginDetails = async (req, res) => {
         res.status(500).json({
             status: false,
             message: "Error fetching broiler login details",
+            error: error.message
+        });
+    }
+};
+
+exports.getPoTruckSummary = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+
+        let dateFilter = '';
+        let dateFilterDc = '';
+        if (from && to) {
+            dateFilter = `WHERE DATE(p.created_at) BETWEEN '${from}' AND '${to}'`;
+            dateFilterDc = `AND DATE(dc.created_at) BETWEEN '${from}' AND '${to}'`;
+        }
+
+        const result = await query(`
+            SELECT
+                p.id AS po_id,
+                p.po_no,
+                p.rr_no,
+                p.status AS po_status,
+                s.name AS supplier_name,
+                (
+                    SELECT STRING_AGG(material_item->>'name', ', ')
+                    FROM jsonb_array_elements(p.materials::jsonb) AS material_item
+                ) AS material_names,
+                COUNT(dc.id) AS total_trucks,
+                COUNT(DISTINCT UPPER(TRIM(dc.truck_no))) FILTER (WHERE dc.truck_no IS NOT NULL AND TRIM(dc.truck_no) != '') AS distinct_trucks,
+                COALESCE(
+                    JSON_AGG(
+                        JSON_BUILD_OBJECT(
+                            'dc_id', dc.id,
+                            'truck_no', TRIM(dc.truck_no),
+                            'doc_no', dc.doc_no,
+                            'token_no', dc.token_no,
+                            'status', dc.status,
+                            'is_arrived', dc.is_arrived,
+                            'created_at', TO_CHAR(dc.created_at, 'DD-Mon-YYYY HH12:MI AM')
+                        ) ORDER BY dc.created_at DESC
+                    ) FILTER (WHERE dc.id IS NOT NULL),
+                    '[]'
+                ) AS trucks
+            FROM po p
+            JOIN supplier s ON p.supplier__id = s.id
+            LEFT JOIN delivery_challan dc ON dc.rr_no = p.rr_no ${dateFilterDc}
+            ${dateFilter}
+            GROUP BY p.id, p.po_no, p.rr_no, s.name, p.materials, p.created_at
+            ORDER BY p.created_at DESC;
+        `);
+
+        return res.status(200).json({
+            status: true,
+            data: result
+        });
+
+    } catch (error) {
+        console.error('Error fetching PO truck summary:', error);
+        return res.status(500).json({
+            status: false,
+            message: 'Error fetching PO truck summary',
+            error: error.message
+        });
+    }
+};
+
+
+
+
+exports.getDashboardModalDetails = async (req, res) => {
+    try {
+        const { type, from, to } = req.query;
+
+        let dateFilterDc = '';
+        if (from && to) {
+            dateFilterDc = `AND DATE(dc.created_at) BETWEEN '${from}' AND '${to}'`;
+        }
+
+        let data = [];
+
+        if (type === 'po') {
+            const poDateFilter = from && to ? `WHERE DATE(p.created_at) BETWEEN '${from}' AND '${to}'` : '';
+            data = await query(`
+                SELECT 
+                    p.id,
+                    p.po_no,
+                    p.rr_no,
+                    p.status,
+                    TO_CHAR(p.po_date, 'DD-Mon-YYYY') AS po_date,
+                    TO_CHAR(p.created_at, 'DD-Mon-YYYY') AS created_at,
+                    s.name AS supplier_name,
+                    (
+                        SELECT STRING_AGG(material_item->>'name', ', ')
+                        FROM jsonb_array_elements(p.materials::jsonb) AS material_item
+                    ) AS material_names,
+                    COUNT(dc.id) AS total_trucks,
+                    COUNT(DISTINCT UPPER(TRIM(dc.truck_no))) FILTER (WHERE dc.truck_no IS NOT NULL AND TRIM(dc.truck_no) != '') AS distinct_trucks
+                FROM po p
+                LEFT JOIN supplier s ON p.supplier__id = s.id
+                LEFT JOIN delivery_challan dc ON dc.rr_no = p.rr_no ${dateFilterDc}
+                ${poDateFilter}
+                GROUP BY p.id, p.po_no, p.rr_no, p.status, p.po_date, p.created_at, s.name, p.materials
+                ORDER BY p.created_at DESC;
+            `);
+        } else if (type === 'dc') {
+            const dcDateFilter = from && to ? `WHERE DATE(dc.created_at) BETWEEN '${from}' AND '${to}'` : '';
+            data = await query(`
+                SELECT 
+                    dc.id,
+                    dc.doc_no,
+                    UPPER(TRIM(dc.truck_no)) AS truck_no,
+                    dc.rr_no,
+                    dc.token_no,
+                    dc.status,
+                    TO_CHAR(dc.created_at, 'DD-Mon-YYYY HH12:MI AM') AS created_at,
+                    (
+                        SELECT STRING_AGG(material_item->>'name', ', ')
+                        FROM jsonb_array_elements(dc.materials::jsonb) AS material_item
+                    ) AS material_names
+                FROM delivery_challan dc
+                ${dcDateFilter}
+                ORDER BY dc.created_at DESC;
+            `);
+        } else if (type === 'supplier') {
+            data = await query(`
+                SELECT 
+                    s.id,
+                    s.supplier_id,
+                    s.name,
+                    s.status,
+                    TO_CHAR(s.created_at, 'DD-Mon-YYYY') AS created_at,
+                    COUNT(DISTINCT p.id) AS total_pos,
+                    COUNT(dc.id) AS total_dcs
+                FROM supplier s
+                LEFT JOIN po p ON p.supplier__id = s.id
+                LEFT JOIN delivery_challan dc ON dc.rr_no = p.rr_no
+                GROUP BY s.id, s.supplier_id, s.name, s.status, s.created_at
+                ORDER BY s.name ASC;
+            `);
+        } else if (type === 'truck') {
+            const truckDateFilter = from && to ? `AND DATE(dc.created_at) BETWEEN '${from}' AND '${to}'` : '';
+            data = await query(`
+                SELECT 
+                    UPPER(TRIM(dc.truck_no)) AS truck_no,
+                    COUNT(dc.id) AS total_trips,
+                    TO_CHAR(MAX(dc.created_at), 'DD-Mon-YYYY HH12:MI AM') AS last_trip_date,
+                    TO_CHAR(MIN(dc.created_at), 'DD-Mon-YYYY') AS first_trip_date
+                FROM delivery_challan dc
+                WHERE dc.truck_no IS NOT NULL AND TRIM(dc.truck_no) != ''
+                ${truckDateFilter}
+                GROUP BY UPPER(TRIM(dc.truck_no))
+                ORDER BY total_trips DESC;
+            `);
+        } else {
+            return res.status(400).json({ status: false, message: "Invalid type specified" });
+        }
+
+        return res.status(200).json({
+            status: true,
+            type,
+            count: data.length,
+            data
+        });
+    } catch (error) {
+        console.error("Error in getDashboardModalDetails:", error);
+        return res.status(500).json({
+            status: false,
+            message: "Failed to fetch dashboard modal details",
             error: error.message
         });
     }

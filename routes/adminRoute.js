@@ -18,7 +18,9 @@ const {
     getFarmActivityReport,
     getBroilerDashboardReport,
     getBroilerFarmActivityDetails,
-    getBroilerLoginDetails
+    getBroilerLoginDetails,
+    getPoTruckSummary,
+    getDashboardModalDetails
 } = require("../controllers/adminController");
 
 const {
@@ -52,4 +54,8 @@ router.get("/activity-logs/all", getAllActivityLogs);
 router.get("/activity-logs/mobile", getMobileActivity);
 router.get("/activity-logs/admin", getAdminAuditLog);
 
+router.get("/po-truck-summary", getPoTruckSummary);
+router.get("/dashboard-modal-details", getDashboardModalDetails);
+
 module.exports = router;
+
