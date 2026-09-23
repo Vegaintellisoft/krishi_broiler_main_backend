@@ -1,4 +1,5 @@
-const { query } = require("../../config/db");
+﻿const { query } = require("../../config/db");
+const { syncPlantFarmersToLine } = require("./farmerLineController");
 
 const TABLE = "broiler.line_farm_master";
 const SKIP_FIELDS = new Set(["id", "created_at", "updated_at"]);
@@ -25,7 +26,7 @@ exports.getAllLineFarm = async (req, res) => {
 };
 
 // -------------------------------------------------
-// CREATE
+// CREATE  (auto-syncs plant farmers into farmer_line_master after insert)
 // -------------------------------------------------
 exports.createLineFarm = async (req, res) => {
   try {
@@ -74,10 +75,23 @@ exports.createLineFarm = async (req, res) => {
     `;
 
     const result = await query(sql, values);
+    const newLineFarm = result[0];
+
+    // ── AUTO-SYNC: Add all plant farmers to this new line in farmer_line_master ──
+    let syncResult = null;
+    try {
+      syncResult = await syncPlantFarmersToLine(newLineFarm.id);
+      console.log(`Auto-sync after line creation (id=${newLineFarm.id}):`, syncResult);
+    } catch (syncErr) {
+      // Non-fatal: log but don't fail the create response
+      console.warn("Auto-sync warning (non-fatal):", syncErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: "Line farm record created",
-      data: result[0],
+      data: newLineFarm,
+      autoSync: syncResult,
     });
   } catch (error) {
     console.error("Error in createLineFarm:", error);

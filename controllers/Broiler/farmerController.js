@@ -1,4 +1,4 @@
-const axios = require("axios");
+﻿const axios = require("axios");
 const { query } = require("../../config/db");
 
 // -------------------------------------------------
@@ -102,7 +102,18 @@ exports.getFarmer = async (req, res) => {
       ...farmerMap[farmer.farmer_supplier]
     }));
 
-    // console.log(enrichedData)
+    // Automatically sync all plant farmers to farmer_line_master
+    try {
+      const { autoSyncPlantFarmersFromList } = require("./farmerLineController");
+      const farmerIds = formattedData.map(f => f.farmer_supplier).filter(Boolean);
+      if (farmerIds.length > 0 && plant) {
+        autoSyncPlantFarmersFromList(plant, farmerIds).catch(e =>
+          console.warn("Auto-sync plant farmers warning:", e.message)
+        );
+      }
+    } catch (syncErr) {
+      console.warn("Auto-sync plant farmers warning:", syncErr.message);
+    }
 
     return res.json({
       success: true,
@@ -110,7 +121,7 @@ exports.getFarmer = async (req, res) => {
     });
 
   } catch (error) {
-    // SAP is unreachable – fall back to local DB
+    // SAP is unreachable â€“ fall back to local DB
     console.warn("SAP unavailable for getFarmer, falling back to DB:", error.message);
     try {
       const { plant } = req.query;
@@ -424,6 +435,18 @@ exports.createFarmerLocation = async (req, res) => {
     `;
 
     const result = await query(sql, values);
+
+    // Auto-add this farmer to all lines of that plant in farmer_line_master
+    try {
+      const { autoAddFarmerToPlantLines } = require("./farmerLineController");
+      const farmerSupplier = data.farmer_supplier || data.farmer_no;
+      if (farmerSupplier && data.plant) {
+        await autoAddFarmerToPlantLines(farmerSupplier, data.plant);
+      }
+    } catch (syncErr) {
+      console.warn("Auto-add farmer to plant lines warning:", syncErr.message);
+    }
+
     return res.status(201).json({
       success: true,
       message: "Farmer location created",

@@ -33,7 +33,7 @@ function parseDateForDb(val) {
 
 exports.addPO = async (req, res) => {
     const { po_no, supplier__id, bill_no,
-        rr_no, materials, user_id, status, po_date, rr_date, supplier_invoice_date } = req.body;
+        rr_no, materials, user_id, status, po_date, rr_date, supplier_invoice_date, dispatch_from_id, dispatchFromId } = req.body;
 
     if (!po_no || !supplier__id || !materials) {
         return res.status(400).json({
@@ -56,11 +56,12 @@ exports.addPO = async (req, res) => {
         const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : 1;
         const cleanUserId = user_id ? parseInt(user_id, 10) : null;
         const cleanSupplierId = parseInt(supplier__id, 10);
+        const cleanDispatchFromId = dispatch_from_id ? parseInt(dispatch_from_id, 10) : (dispatchFromId ? parseInt(dispatchFromId, 10) : null);
 
         const queryText = `
             INSERT INTO PO (po_no, supplier__id, bill_no, rr_no, 
-            materials, user_id, status, po_date, rr_date, supplier_invoice_date, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            materials, user_id, status, po_date, rr_date, supplier_invoice_date, dispatch_from_id, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             RETURNING *;
         `;
 
@@ -74,7 +75,8 @@ exports.addPO = async (req, res) => {
             cleanStatus,
             cleanPoDate,
             cleanRrDate,
-            cleanInvoiceDate
+            cleanInvoiceDate,
+            cleanDispatchFromId
         ];
 
         const result = await query(queryText, values);
@@ -103,7 +105,7 @@ exports.addPO = async (req, res) => {
 
 exports.updatePO = async (req, res) => {
     const { id } = req.params;
-    const { po_no, supplier__id, bill_no, rr_no, materials, status, po_date, rr_date, supplier_invoice_date } = req.body;
+    const { po_no, supplier__id, bill_no, rr_no, materials, status, po_date, rr_date, supplier_invoice_date, dispatch_from_id, dispatchFromId } = req.body;
 
     if (!po_no || !supplier__id || !materials) {
         return res.status(400).json({
@@ -136,14 +138,18 @@ exports.updatePO = async (req, res) => {
         const cleanInvoiceDate = supplier_invoice_date !== undefined ? parseDateForDb(supplier_invoice_date) : existingPO.supplier_invoice_date;
         const cleanStatus = status !== undefined && status !== null && status !== '' ? parseInt(status, 10) : existingPO.status;
         const cleanSupplierId = supplier__id !== undefined ? parseInt(supplier__id, 10) : existingPO.supplier__id;
+        const cleanDispatchFromId = (dispatch_from_id !== undefined || dispatchFromId !== undefined) 
+            ? (dispatch_from_id ? parseInt(dispatch_from_id, 10) : (dispatchFromId ? parseInt(dispatchFromId, 10) : null)) 
+            : existingPO.dispatch_from_id;
 
         const queryText = `
             UPDATE PO 
             SET po_no = $1, supplier__id = $2, bill_no = $3, 
             rr_no = $4, materials = $5, status=$6, 
             po_date = $7, rr_date = $8, supplier_invoice_date = $9,
+            dispatch_from_id = $10,
             updated_at = CURRENT_TIMESTAMP
-            WHERE id = $10
+            WHERE id = $11
             RETURNING *;
         `;
 
@@ -157,6 +163,7 @@ exports.updatePO = async (req, res) => {
             cleanPoDate,
             cleanRrDate,
             cleanInvoiceDate,
+            cleanDispatchFromId,
             id
         ];
 
@@ -188,6 +195,7 @@ exports.getAll = async (req, res) => {
     try {
         const result = await query(`
             SELECT p.*, s.name AS supplier_name,
+                sl.name AS dispatch_from_name,
                 TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
                 TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
                 TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
@@ -195,6 +203,7 @@ exports.getAll = async (req, res) => {
                 CASE WHEN p.rr_no IS NOT NULL AND TRIM(p.rr_no) != '' THEN (SELECT COUNT(*) FROM delivery_challan dc WHERE dc.rr_no = p.rr_no AND dc.status != 2) ELSE 0 END AS dc_count
             FROM PO p
             LEFT JOIN supplier s ON p.supplier__id = s.id
+            LEFT JOIN source_location sl ON p.dispatch_from_id = sl.id
             ORDER BY 
                 CASE 
                     WHEN p.status = 3 THEN 1  -- Active

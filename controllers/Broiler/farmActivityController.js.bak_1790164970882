@@ -309,10 +309,33 @@ exports.submit = async (req, res) => {
 
             if (user_id) {
                 updateParams.push(String(user_id));
-                updateQueryText += " AND LOWER(TRIM(user_id::text)) = LOWER(TRIM($" + updateParams.length + "::text))";
+                updateQueryText += " AND user_id = $" + updateParams.length;
             }
             updateQueryText += ";";
-            await query(updateQueryText, updateParams);
+            const updateRes = await query(updateQueryText, updateParams);
+
+            // Fallback: If 0 rows updated with user_id, update without user_id filter for the same plant & date
+            if ((!updateRes || updateRes.length === 0) && user_id) {
+                let fallbackUpdateText = `
+                    UPDATE broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
+                    SET end_km = $1, 
+                        upload_end_km = CASE 
+                            WHEN $2::jsonb IS NOT NULL AND jsonb_array_length($2::jsonb) > 0 THEN $2::jsonb 
+                            ELSE upload_end_km 
+                        END, 
+                        running_km = $3
+                    WHERE date = $4 AND sap_status = false`;
+                let fallbackParams = [Number(end_km), uploadEndKmStr || null, Number(running_km) || null, formattedDate];
+                if (plantList.length === 1) {
+                    fallbackParams.push(plantList[0]);
+                    fallbackUpdateText += " AND plant = $" + fallbackParams.length;
+                } else if (plantList.length > 1) {
+                    fallbackParams.push(plantList);
+                    fallbackUpdateText += " AND plant = ANY($" + fallbackParams.length + "::text[])";
+                }
+                fallbackUpdateText += ";";
+                await query(fallbackUpdateText, fallbackParams);
+            }
         }
 
         // ── Fetch draft records ──
@@ -333,11 +356,30 @@ exports.submit = async (req, res) => {
 
         if (user_id) {
             fetchParams.push(String(user_id));
-            fetchQuery += " AND LOWER(TRIM(user_id::text)) = LOWER(TRIM($" + fetchParams.length + "::text))";
+            fetchQuery += " AND user_id = $" + fetchParams.length;
         }
         fetchQuery += ";";
 
         let dbResult = await query(fetchQuery, fetchParams);
+
+        // Fallback: If no records found with user_id filter, check without user_id filter
+        if (dbResult.length === 0 && user_id) {
+            let fallbackFetch = `
+                SELECT * 
+                FROM broiler.` + broilerDataEntry[TABLE_NAME].pgTable + `
+                WHERE date = $1 
+                AND sap_status = false`;
+            const fallbackFetchParams = [formattedDate];
+            if (plantList.length === 1) {
+                fallbackFetchParams.push(plantList[0]);
+                fallbackFetch += " AND plant = $" + fallbackFetchParams.length;
+            } else if (plantList.length > 1) {
+                fallbackFetchParams.push(plantList);
+                fallbackFetch += " AND plant = ANY($" + fallbackFetchParams.length + "::text[])";
+            }
+            fallbackFetch += ";";
+            dbResult = await query(fallbackFetch, fallbackFetchParams);
+        }
 
         if (dbResult.length === 0) {
             return res.status(404).json({
@@ -446,7 +488,7 @@ exports.getEntries = async (req, res) => {
 
         if (user_id) {
             params.push(String(user_id));
-            sql += " AND LOWER(TRIM(user_id::text)) = LOWER(TRIM($" + params.length + "::text))";
+            sql += ` AND user_id = $${params.length}`;
         }
 
         sql += ` ORDER BY created_at DESC;`;

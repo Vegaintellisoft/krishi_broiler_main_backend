@@ -1,0 +1,268 @@
+function parseDateForDb(val) {
+    if (!val) return null;
+    const str = String(val).trim();
+    if (!str) return null;
+    // If format is DD/MM/YYYY or DD-MM-YYYY
+    const ddmmyyyy = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
+    if (ddmmyyyy) {
+        const day = ddmmyyyy[1].padStart(2, '0');
+        const month = ddmmyyyy[2].padStart(2, '0');
+        const year = ddmmyyyy[3];
+        return `${year}-${month}-${day}`;
+    }
+    // If format is YYYY-MM-DD or ISO
+    const yyyymmdd = str.match(/^(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/);
+    if (yyyymmdd) {
+        const year = yyyymmdd[1];
+        const month = yyyymmdd[2].padStart(2, '0');
+        const day = yyyymmdd[3].padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+    const parsed = new Date(str);
+    if (!isNaN(parsed.getTime())) {
+        return parsed.toISOString().split('T')[0];
+    }
+    return null;
+}
+
+const fs = require('fs');
+const path = require('path');
+
+const saveBase64Photos = (rawPhotos, prefix = 'photo') => {
+    if (!rawPhotos) return rawPhotos;
+    let photos = rawPhotos;
+    if (typeof photos === 'string') {
+        try { photos = JSON.parse(photos); } catch (_) { return rawPhotos; }
+    }
+    if (!Array.isArray(photos)) {
+        if (typeof photos === 'object' && photos !== null) photos = [photos];
+        else return rawPhotos;
+    }
+
+    const uploadDir = path.join(process.cwd(), 'uploads', 'broiler');
+    if (!fs.existsSync(uploadDir)) {
+        fs.mkdirSync(uploadDir, { recursive: true });
+    }
+
+    const processed = photos.map(photo => {
+        if (photo && typeof photo === 'object' && photo.base64) {
+            try {
+                const ext = (photo.type && photo.type.includes('png')) ? '.png' : '.jpg';
+                const cleanFileName = photo.fileName ? photo.fileName.replace(/[^a-zA-Z0-9._-]/g, '_') : (prefix + '_' + Date.now() + '_' + Math.round(Math.random() * 1000000) + ext);
+                const filePath = path.join(uploadDir, cleanFileName);
+                const base64Data = photo.base64.replace(/^data:image\/\w+;base64,/, '');
+                fs.writeFileSync(filePath, Buffer.from(base64Data, 'base64'));
+                return {
+                    ...photo,
+                    fileName: cleanFileName,
+                    url: '/uploads/broiler/' + cleanFileName,
+                    path: '/uploads/broiler/' + cleanFileName,
+                };
+            } catch (err) {
+                console.error('Error saving base64 photo to disk:', err.message);
+                return photo;
+            }
+        }
+        return photo;
+    });
+
+    return JSON.stringify(processed);
+};
+
+const qs = require('qs');
+const { format, parse, isValid } = require('date-fns');
+
+const { query } = require("../../config/db");
+
+const broilerDataEntry = require("./sap/broilerDataEntry.json");
+const { sapSubmit } = require("./sap/sapSubmitService");
+
+const TABLE_NAME = "farm_activity";
+
+
+const FARM_ACTIVITY_COLUMNS = [
+    "date",
+    "plant",
+    "running_km",
+    "total_farms",
+    "vehicle_no",
+    "start_km",
+    "upload_start_km",
+
+    "farmer",
+    "in_time",
+    "out_time",
+    "batch",
+    "age",
+    "housed",
+    "stock",
+    "farms_maintenance",
+    "litter_quality",
+    "drinker_cleaning",
+    "body_weight",
+
+    "mortality",
+    "upload_mortality",
+    "upload_material",
+    "reason",
+    "treatment",
+    "cum_mortality_count",
+    "cum_mortality_percentage",
+
+    "material",
+    "quantity_bags",
+    "stock_bags",
+    "cum_feed",
+    "total_feed",
+    "end_km",
+    "upload_end_km",
+
+    // SAP DMC det level fields
+    "dfi_act_grams",    // zzDfiag
+    "feed_bag_given",   // zzFbdg
+    "cum_feed_given",   // zzCumF
+    "std_given",        // zzStdg
+    "stock_cum_feed",   // zzScf
+    "std_body_weight"   // zzSbwt
+];
+
+function normalizeTimeString(timeStr) {
+    if (!timeStr) return null;
+    return timeStr.replace(/\u202f|\u00a0/g, ' ').trim();
+}
+
+const parseTimeFlexible = (timeStr) => {
+    const formats = [
+        "h:mm a",     // 5:30 PM
+        "hh:mm a",    // 05:30 PM
+        "HH:mm",      // 17:30
+        "HH:mm:ss"    // 17:30:00
+    ];
+
+    for (const fmt of formats) {
+        const parsed = parse(timeStr, fmt, new Date());
+        if (isValid(parsed)) {
+            return parsed;
+        }
+    }
+
+    return null;
+};
+
+// ✅ CREATE
+exports.create = async (req, res) => {
+    try {
+        const { date, cum_feed, stock_bags, quantity_bags, total_feed, end_km, ...rest } = req.body;
+
+        let formattedDate = date;
+        if (date) {
+            const parsedDate = parse(date, 'd/M/yyyy', new Date());
+            formattedDate = format(parsedDate, 'yyyy-MM-dd');
+        }
+
+        const user_id = req.body.user_id || "unknown";
+
+        const updatedData = {
+            ...rest,
+            cum_feed: Number(cum_feed),
+            stock_bags: Number(stock_bags),
+            quantity_bags: Number(quantity_bags),
+            total_feed: Number(total_feed),
+            end_km: Number(end_km),
+            // date: formattedDate,
+            // sap_status: false,
+            // user_id
+        };
+
+        if (rest.in_time) {
+            const cleanInTime = normalizeTimeString(rest.in_time);
+            const parsedInTime = parseTimeFlexible(cleanInTime);
+
+            if (!parsedInTime) {
+                return res.status(400).json({
+                    status: false,
+                    message: `Invalid in_time format. Got '${rest.in_time}'`
+                });
+            }
+            updatedData.in_time = format(parsedInTime, 'HH:mm:ss'); // PostgreSQL TIME
+        }
+
+        if (rest.out_time) {
+            const cleanOutTime = normalizeTimeString(rest.out_time);
+            const parsedOutTime = parseTimeFlexible(cleanOutTime);
+
+            if (!parsedOutTime) {
+                return res.status(400).json({
+                    status: false,
+                    message: `Invalid out_time format. Got '${rest.out_time}'`
+                });
+            }
+            updatedData.out_time = format(parsedOutTime, 'HH:mm:ss'); // PostgreSQL TIME
+        }
+
+
+        updatedData.date = formattedDate;
+        updatedData.sap_status = false;
+        updatedData.user_id = user_id;
+        // If upload_mortality is an empty array "[]", keep it as-is; only process if it has actual photos
+        if (updatedData.upload_mortality) {
+            const parsedMort = (() => { try { const p = JSON.parse(updatedData.upload_mortality); return Array.isArray(p) ? p : null; } catch(_){ return null; } })();
+            if (parsedMort && parsedMort.length > 0) {
+                updatedData.upload_mortality = saveBase64Photos(updatedData.upload_mortality, "mortality");
+            }
+            // If empty array, keep as "[]" � this is valid when mortality = 0
+        }
+        if (updatedData.upload_material) {
+            const parsedMat = (() => { try { const p = JSON.parse(updatedData.upload_material); return Array.isArray(p) ? p : null; } catch(_){ return null; } })();
+            if (parsedMat && parsedMat.length > 0) {
+                updatedData.upload_material = saveBase64Photos(updatedData.upload_material, "material");
+            }
+        }
+        if (updatedData.upload_start_km) updatedData.upload_start_km = saveBase64Photos(updatedData.upload_start_km, "start_km");
+        if (updatedData.upload_end_km) updatedData.upload_end_km = saveBase64Photos(updatedData.upload_end_km, "end_km");
+
+        // console.log(updatedData)
+        // Handle file upload (relative path only)
+        // if (req.file) {
+        //     data.upload_mortality = `uploads/${req.file.filename}`;
+        // }
+        const columns = Object.keys(updatedData);
+        const values = Object.values(updatedData);
+
+        console.log(columns)
+
+        const placeholders = columns.map((_, i) => `$${i + 1}`).join(", ");
+
+        const insertQuery = `
+            INSERT INTO broiler.${broilerDataEntry[TABLE_NAME].pgTable} (${columns.join(", ")})
+            VALUES (${placeholders})
+            ON CONFLICT (date, plant, farmer)
+            DO NOTHING
+            RETURNING *;
+        `;
+
+
+        const dbResult = await query(insertQuery, values);
+
+        if (dbResult.length === 0) {
+            return res.status(409).json({
+                status: false,
+                message: "Record already exists"
+            });
+        }
+
+        return res.status(201).json({
+            status: true,
+            message: `Farm activity record saved as draft`,
+            data: dbResult
+        });
+    } catch (error) {
+        console.error("Error while creating farm activity:", error);
+        res.status(500).json({
+            status: false,
+            message: "Error while creating farm activity",
+            error: error.message,
+        });
+    }
+};
+
