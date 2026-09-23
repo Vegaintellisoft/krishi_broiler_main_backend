@@ -1,4 +1,4 @@
-﻿const path = require("path");
+const path = require("path");
 const fs = require("fs");
 const puppeteer = require("puppeteer");
 const { getChromiumPath } = require("../services/helper");
@@ -191,7 +191,8 @@ exports.getAll = async (req, res) => {
                 TO_CHAR(p.po_date, 'YYYY-MM-DD') AS po_date,
                 TO_CHAR(p.rr_date, 'YYYY-MM-DD') AS rr_date,
                 TO_CHAR(p.supplier_invoice_date, 'YYYY-MM-DD') AS supplier_invoice_date,
-                jsonb_array_length(p.materials) AS material_count
+                jsonb_array_length(p.materials) AS material_count,
+                CASE WHEN p.rr_no IS NOT NULL AND TRIM(p.rr_no) != '' THEN (SELECT COUNT(*) FROM delivery_challan dc WHERE dc.rr_no = p.rr_no AND dc.status != 2) ELSE 0 END AS dc_count
             FROM PO p
             LEFT JOIN supplier s ON p.supplier__id = s.id
             ORDER BY 

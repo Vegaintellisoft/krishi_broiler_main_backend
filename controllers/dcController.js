@@ -708,35 +708,47 @@ const triggerSAPSync = async (dcId) => {
     try {
         const dcRows = await getDCReportById(dcId);
 
-        if (dcRows.length > 0) {
-            for (const row of dcRows) {
-                const sapPayload = convertToSAP(row);
-                console.log("Background SAP Payload================>>>>:", sapPayload);
+        if (!dcRows.length) return;
 
-                const qsString = qs.stringify(
-                    { "sap-client": "500", ...sapPayload },
-                    { encode: true }
-                );
+        const rowErrors = [];
 
-                const finalUrl = `${process.env.SAP_BASE_URL}?${qsString}`;
+        for (const row of dcRows) {
+            const sapPayload = convertToSAP(row);
+            console.log('Background SAP Payload ================>', sapPayload);
 
-                let config = {
-                    method: 'post',
-                    maxBodyLength: Infinity,
-                    url: finalUrl,
-                    headers: {
-                        'Authorization': 'Basic RERJQzpLcmlzaGlQckRAMTIzNDUjQA==',
-                        'Cookie': 'SAP_SESSIONID_KSP_500=-aRrLzyc7__nirnv6RaTQxae5u3KxBHwtU5PNnqbrPI%3d; sap-usercontext=sap-client=500'
-                    }
-                };
+            const qsString = qs.stringify(
+                { 'sap-client': '500', ...sapPayload },
+                { encode: true }
+            );
 
-                const response = await axios.request(config);
-                console.log("Background SAP Response:", response.data);
+            const finalUrl = `${SAP_BASE_URL}?${qsString}`;
+
+            try {
+                const response = await axios.post(finalUrl, null, {
+                    auth: { username: SAP_USERNAME, password: SAP_PASSWORD },
+                    headers: { Accept: 'application/json' }
+                });
+                console.log('Background SAP Response [status:', response.status, ']:', response.data);
+            } catch (rowErr) {
+                const status = rowErr.response?.status;
+                const rawData = rowErr.response?.data;
+                const sapErrorBody = typeof rawData === 'string' && rawData.trim().startsWith('<')
+                    ? rawData.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500)
+                    : rawData;
+                console.error(`Background SAP Row Error [DC ${dcId}, mat: ${row.material_number}] HTTP ${status}:`, sapErrorBody || rowErr.message);
+                rowErrors.push({ material: row.material_number, httpStatus: status, sapMessage: sapErrorBody || rowErr.message });
             }
+        }
+
+        // Mark as sent even if some rows failed (partial success)
+        if (rowErrors.length < dcRows.length) {
             await query(`UPDATE delivery_challan SET is_send_sap=true WHERE id=$1`, [dcId]);
+            console.log(`Background SAP: DC ${dcId} marked as is_send_sap=true (${dcRows.length - rowErrors.length}/${dcRows.length} rows ok)`);
+        } else {
+            console.error(`Background SAP: All rows failed for DC ${dcId}, is_send_sap NOT updated`);
         }
     } catch (sapErr) {
-        console.error("Background SAP Failed:", sapErr.message);
+        console.error('Background SAP Failed:', sapErr.message);
     }
 };
 

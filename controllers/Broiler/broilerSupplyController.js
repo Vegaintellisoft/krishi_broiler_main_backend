@@ -468,7 +468,7 @@ const dispatchBosSmsAsync = (data, contextName = 'create') => {
             const mobiles = [];
             if (farmerPhone && String(farmerPhone).trim()) mobiles.push(String(farmerPhone).trim());
 
-            if (mobiles.length > 0) {
+            if (mobiles.length > 0 && process.env.SEND_FARMER_SMS !== 'false') {
                 sendBosSmS({
                     mobiles,
                     birds: totalBirds,
@@ -481,36 +481,42 @@ const dispatchBosSmsAsync = (data, contextName = 'create') => {
                 }).then(smsRes => {
                     console.log(`BOS SMS (${contextName}) - Dispatch response:`, smsRes);
                 }).catch(e => console.warn(`BOS SMS (${contextName}) send error:`, e.message));
+            } else if (process.env.SEND_FARMER_SMS === 'false') {
+                console.log(`BOS SMS (${contextName}) - Farmer SMS disabled via SEND_FARMER_SMS=false`);
             }
 
-            // Customer SMS
-            try {
-                const { customerPhone, customerBalance, customerName } = await fetchCustomerInfo(data.customer).catch(() => ({}));
-                const customerMobiles = [];
-                if (customerPhone && String(customerPhone).trim()) customerMobiles.push(String(customerPhone).trim());
+            // Customer SMS — controlled by SEND_CUSTOMER_SMS env flag (default: enabled)
+            if (process.env.SEND_CUSTOMER_SMS === 'false') {
+                console.log(`BOS SMS (${contextName}) - Customer SMS disabled via SEND_CUSTOMER_SMS=false`);
+            } else {
+                try {
+                    const { customerPhone, customerBalance, customerName } = await fetchCustomerInfo(data.customer).catch(() => ({}));
+                    const customerMobiles = [];
+                    if (customerPhone && String(customerPhone).trim()) customerMobiles.push(String(customerPhone).trim());
 
-                if (!customerMobiles.length && data.customer_details?.telephone) {
-                    customerMobiles.push(String(data.customer_details.telephone).trim());
-                }
+                    if (!customerMobiles.length && data.customer_details?.telephone) {
+                        customerMobiles.push(String(data.customer_details.telephone).trim());
+                    }
 
-                if (customerMobiles.length > 0) {
-                    const netKg = +(totalWeight).toFixed(2);
-                    const custName = customerName || data.customer_details?.customer_name || '';
-                    const customerLabel = `${data.customer || '-'} - ${custName}`;
-                    const cleanCustomerLabel = customerLabel.trim().replace(/ - $/, '');
-                    sendBosCustomerSMS({
-                        mobiles: customerMobiles,
-                        net_weight: netKg,
-                        farmer_label: cleanCustomerLabel,
-                        vehicle_no: data.vehicle_no || '-',
-                        rate: data.rate || '0',
-                        balance: customerBalance || 0
-                    }).then(smsRes => {
-                        console.log(`BOS SMS (${contextName}) - Customer dispatch response:`, smsRes);
-                    }).catch(e => console.warn(`BOS SMS (${contextName}) customer send error:`, e.message));
+                    if (customerMobiles.length > 0) {
+                        const netKg = +(totalWeight).toFixed(2);
+                        const custName = customerName || data.customer_details?.customer_name || '';
+                        const customerLabel = `${data.customer || '-'} - ${custName}`;
+                        const cleanCustomerLabel = customerLabel.trim().replace(/ - $/, '');
+                        sendBosCustomerSMS({
+                            mobiles: customerMobiles,
+                            net_weight: netKg,
+                            farmer_label: cleanCustomerLabel,
+                            vehicle_no: data.vehicle_no || '-',
+                            rate: data.rate || '0',
+                            balance: customerBalance || 0
+                        }).then(smsRes => {
+                            console.log(`BOS SMS (${contextName}) - Customer dispatch response:`, smsRes);
+                        }).catch(e => console.warn(`BOS SMS (${contextName}) customer send error:`, e.message));
+                    }
+                } catch (custSmsErr) {
+                    console.warn(`BOS SMS (${contextName}) customer block error:`, custSmsErr.message);
                 }
-            } catch (custSmsErr) {
-                console.warn(`BOS SMS (${contextName}) customer block error:`, custSmsErr.message);
             }
         } catch (smsErr) {
             console.warn(`BOS SMS (${contextName}) block error:`, smsErr.message);
